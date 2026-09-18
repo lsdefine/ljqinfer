@@ -1,0 +1,98 @@
+{
+  "reference": "/data/qwen_decode_opt_20260909/gold_long",
+  "candidate": "/data/qwen_decode_opt_20260909/followup_append_norm/candidate_long",
+  "summary": [
+    {
+      "case": "ctx16370_r0",
+      "exact": true,
+      "steps": 63,
+      "tokens": [
+        256
+      ],
+      "accepted": [
+        192
+      ],
+      "old_median_ms": 30.180780217051506,
+      "new_median_ms": 29.25917599350214,
+      "old_mean_ms": 31.37470916327503,
+      "new_mean_ms": 30.034478063936586
+    },
+    {
+      "case": "ctx16370_r1",
+      "exact": true,
+      "steps": 63,
+      "tokens": [
+        256
+      ],
+      "accepted": [
+        192
+      ],
+      "old_median_ms": 29.908542055636644,
+      "new_median_ms": 29.146824963390827,
+      "old_mean_ms": 30.747268745606696,
+      "new_mean_ms": 30.69661871564609
+    },
+    {
+      "case": "ctx2040_r0",
+      "exact": true,
+      "steps": 66,
+      "tokens": [
+        256
+      ],
+      "accepted": [
+        189
+      ],
+      "old_median_ms": 29.981782659888268,
+      "new_median_ms": 29.180025681853294,
+      "old_mean_ms": 30.711443049081584,
+      "new_mean_ms": 31.135063422353642
+    },
+    {
+      "case": "ctx2040_r1",
+      "exact": true,
+      "steps": 66,
+      "tokens": [
+        256
+      ],
+      "accepted": [
+        189
+      ],
+      "old_median_ms": 29.826560989022255,
+      "new_median_ms": 28.950423002243042,
+      "old_mean_ms": 30.54801309317873,
+      "new_mean_ms": 30.183652236142702
+    },
+    {
+      "case": "ctx8190_r0",
+      "exact": true,
+      "steps": 52,
+      "tokens": [
+        256
+      ],
+      "accepted": [
+        203
+      ],
+      "old_median_ms": 30.17828520387411,
+      "new_median_ms": 29.449977912008762,
+      "old_mean_ms": 31.835944889936336,
+      "new_mean_ms": 31.22510641899913
+    },
+    {
+      "case": "ctx8190_r1",
+      "exact": true,
+      "steps": 52,
+      "tokens": [
+        256
+      ],
+      "accepted": [
+        203
+      ],
+      "old_median_ms": 29.643130488693714,
+      "new_median_ms": 29.1771050542593,
+      "old_mean_ms": 30.696324614244837,
+      "new_mean_ms": 30.596305637858634
+    }
+  ],
+  "errors": [],
+  "complete": true
+}

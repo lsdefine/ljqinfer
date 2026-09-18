@@ -1,0 +1,19 @@
+[Unit]
+Description=ljqinfer A800 GPU4-7 TP4 Qwen DFlash2
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/ljqinfer-tp4.env
+Type=simple
+User=ljq
+WorkingDirectory=/data/ljq/src/ljqinfer_qwen_tp4
+ExecStart=/data/ljq/vllm-env/bin/python /data/ljq/src/ljqinfer_qwen_tp4/scripts/serve.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=150
+KillMode=mixed
+SuccessExitStatus=130
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,1204 @@
+{
+  "binList": [
+    {
+      "implMode": "high_performance",
+      "int64Mode": false,
+      "simplifiedKeyMode": 0,
+      "simplifiedKey": [
+        "ChunkGatedDeltaRuleFwdH/d=0,p=1/1,2/1,2/1,2/1,2/1,2/1,2/1,2",
+        "ChunkGatedDeltaRuleFwdH/d=0,p=0/1,2/1,2/1,2/1,2/1,2/1,2/1,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=1/1,2/1,2/1,2/1,2/1,2/1,2/1,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=0/1,2/1,2/1,2/1,2/1,2/1,2/1,2"
+      ],
+      "staticKey": "14bb2af47b7fabfac2a0591b0d07c5cf54333e5a2df2fe92c12205ec9c47e093,7f3b38bb97a33eb1b8477463cacac0ea0c3dd9933f0fcb4540ddd977de32cc91",
+      "inputs": [
+        {
+          "name": "k",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "w",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "u",
+          "index": 2,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "g",
+          "index": 3,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "inital_state",
+          "index": 4,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "cu_seqlens",
+          "index": 5,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "chunk_indices",
+          "index": 6,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "v_new",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "final_state",
+          "index": 2,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "output_final_state",
+          "dtype": "bool",
+          "value": false
+        },
+        {
+          "name": "chunk_size",
+          "dtype": "int",
+          "value": 0
+        },
+        {
+          "name": "inital_state_stride0",
+          "dtype": "int",
+          "value": 0
+        }
+      ],
+      "opMode": "dynamic",
+      "optionalInputMode": "gen_placeholder",
+      "deterministic": "ignore",
+      "optionalOutputMode": "gen_placeholder",
+      "binInfo": {
+        "jsonFilePath": "ascend910b/chunk_gated_delta_rule_fwd_h/ChunkGatedDeltaRuleFwdH_0c6d721f948d07280ddb3f78c8ee264f.json"
+      }
+    },
+    {
+      "implMode": "high_performance",
+      "int64Mode": false,
+      "simplifiedKeyMode": 0,
+      "simplifiedKey": [
+        "ChunkGatedDeltaRuleFwdH/d=0,p=1/27,2/27,2/27,2/27,2/27,2/27,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=0,p=0/27,2/27,2/27,2/27,2/27,2/27,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=1/27,2/27,2/27,2/27,2/27,2/27,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=0/27,2/27,2/27,2/27,2/27,2/27,2/0,2"
+      ],
+      "staticKey": "0e2c8c0e9dd2341b3b091572a42e89ca1a8531b517f323095998cf13f1785474,fe0b5fa50883f3508fb34597e8a5232eddbc1ec76386e8d9e7ed6cf35130c9d9",
+      "inputs": [
+        {
+          "name": "k",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "w",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "u",
+          "index": 2,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "g",
+          "index": 3,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "inital_state",
+          "index": 4,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "cu_seqlens",
+          "index": 5,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "chunk_indices",
+          "index": 6,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "v_new",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "final_state",
+          "index": 2,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "output_final_state",
+          "dtype": "bool",
+          "value": false
+        },
+        {
+          "name": "chunk_size",
+          "dtype": "int",
+          "value": 0
+        },
+        {
+          "name": "inital_state_stride0",
+          "dtype": "int",
+          "value": 0
+        }
+      ],
+      "opMode": "dynamic",
+      "optionalInputMode": "gen_placeholder",
+      "deterministic": "ignore",
+      "optionalOutputMode": "gen_placeholder",
+      "binInfo": {
+        "jsonFilePath": "ascend910b/chunk_gated_delta_rule_fwd_h/ChunkGatedDeltaRuleFwdH_17f9487b3624265312502db640f0e3cb.json"
+      }
+    },
+    {
+      "implMode": "high_performance",
+      "int64Mode": false,
+      "simplifiedKeyMode": 0,
+      "simplifiedKey": [
+        "ChunkGatedDeltaRuleFwdH/d=0,p=1/1,2/1,2/1,2/0,2/1,2/1,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=0,p=0/1,2/1,2/1,2/0,2/1,2/1,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=1/1,2/1,2/1,2/0,2/1,2/1,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=0/1,2/1,2/1,2/0,2/1,2/1,2/0,2"
+      ],
+      "staticKey": "b9967ffc8c9793a3e0ca89946ff5769ee51ab0cc6b2707f3e6b8324fa3d09c27,ad60073a33f6652616b3012ad8d04a469ecd2a49b59a508a014c523862923d35",
+      "inputs": [
+        {
+          "name": "k",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "w",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "u",
+          "index": 2,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "g",
+          "index": 3,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "inital_state",
+          "index": 4,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "cu_seqlens",
+          "index": 5,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "chunk_indices",
+          "index": 6,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "v_new",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "final_state",
+          "index": 2,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "output_final_state",
+          "dtype": "bool",
+          "value": false
+        },
+        {
+          "name": "chunk_size",
+          "dtype": "int",
+          "value": 0
+        },
+        {
+          "name": "inital_state_stride0",
+          "dtype": "int",
+          "value": 0
+        }
+      ],
+      "opMode": "dynamic",
+      "optionalInputMode": "gen_placeholder",
+      "deterministic": "ignore",
+      "optionalOutputMode": "gen_placeholder",
+      "binInfo": {
+        "jsonFilePath": "ascend910b/chunk_gated_delta_rule_fwd_h/ChunkGatedDeltaRuleFwdH_7de42a0daa64bba8f188684b09dbd9e6.json"
+      }
+    },
+    {
+      "implMode": "high_performance",
+      "int64Mode": false,
+      "simplifiedKeyMode": 0,
+      "simplifiedKey": [
+        "ChunkGatedDeltaRuleFwdH/d=0,p=1/27,2/27,2/27,2/0,2/27,2/27,2/27,2",
+        "ChunkGatedDeltaRuleFwdH/d=0,p=0/27,2/27,2/27,2/0,2/27,2/27,2/27,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=1/27,2/27,2/27,2/0,2/27,2/27,2/27,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=0/27,2/27,2/27,2/0,2/27,2/27,2/27,2"
+      ],
+      "staticKey": "87adb5839d9b38c5da387a029980c8ad7635620e6b67c28a99afc642d78c60de,5a4993af3c469a3ed0df3468523e5445ac68682f717bba963a47cd5779a216c0",
+      "inputs": [
+        {
+          "name": "k",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "w",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "u",
+          "index": 2,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "g",
+          "index": 3,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "inital_state",
+          "index": 4,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "cu_seqlens",
+          "index": 5,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "chunk_indices",
+          "index": 6,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "v_new",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "final_state",
+          "index": 2,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "output_final_state",
+          "dtype": "bool",
+          "value": false
+        },
+        {
+          "name": "chunk_size",
+          "dtype": "int",
+          "value": 0
+        },
+        {
+          "name": "inital_state_stride0",
+          "dtype": "int",
+          "value": 0
+        }
+      ],
+      "opMode": "dynamic",
+      "optionalInputMode": "gen_placeholder",
+      "deterministic": "ignore",
+      "optionalOutputMode": "gen_placeholder",
+      "binInfo": {
+        "jsonFilePath": "ascend910b/chunk_gated_delta_rule_fwd_h/ChunkGatedDeltaRuleFwdH_7e558339de2b775a637749a2f058423b.json"
+      }
+    },
+    {
+      "implMode": "high_performance",
+      "int64Mode": false,
+      "simplifiedKeyMode": 0,
+      "simplifiedKey": [
+        "ChunkGatedDeltaRuleFwdH/d=0,p=1/1,2/1,2/1,2/0,2/1,2/1,2/1,2",
+        "ChunkGatedDeltaRuleFwdH/d=0,p=0/1,2/1,2/1,2/0,2/1,2/1,2/1,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=1/1,2/1,2/1,2/0,2/1,2/1,2/1,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=0/1,2/1,2/1,2/0,2/1,2/1,2/1,2"
+      ],
+      "staticKey": "8f7026cb3e4b4e6e2f6ec94658c13c222449bf6dbd263f1fd333af17b4861036,fced2e8eaae087171f9e53046416f2e83f39e44b694065784212f8a3b650bdcf",
+      "inputs": [
+        {
+          "name": "k",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "w",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "u",
+          "index": 2,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "g",
+          "index": 3,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "inital_state",
+          "index": 4,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "cu_seqlens",
+          "index": 5,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "chunk_indices",
+          "index": 6,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "v_new",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "final_state",
+          "index": 2,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "output_final_state",
+          "dtype": "bool",
+          "value": false
+        },
+        {
+          "name": "chunk_size",
+          "dtype": "int",
+          "value": 0
+        },
+        {
+          "name": "inital_state_stride0",
+          "dtype": "int",
+          "value": 0
+        }
+      ],
+      "opMode": "dynamic",
+      "optionalInputMode": "gen_placeholder",
+      "deterministic": "ignore",
+      "optionalOutputMode": "gen_placeholder",
+      "binInfo": {
+        "jsonFilePath": "ascend910b/chunk_gated_delta_rule_fwd_h/ChunkGatedDeltaRuleFwdH_c90ea72048d28d09e09d67b3c1510fd4.json"
+      }
+    },
+    {
+      "implMode": "high_performance",
+      "int64Mode": false,
+      "simplifiedKeyMode": 0,
+      "simplifiedKey": [
+        "ChunkGatedDeltaRuleFwdH/d=0,p=1/27,2/27,2/27,2/27,2/27,2/27,2/27,2",
+        "ChunkGatedDeltaRuleFwdH/d=0,p=0/27,2/27,2/27,2/27,2/27,2/27,2/27,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=1/27,2/27,2/27,2/27,2/27,2/27,2/27,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=0/27,2/27,2/27,2/27,2/27,2/27,2/27,2"
+      ],
+      "staticKey": "091fc75ced800b4143ee25a00f41f84b8b650a748f5ba6657ef28dbe39f28a0f,023d96312002917a90c15ee1b9da60c86ea293e335c54113c6c3bdcf58686335",
+      "inputs": [
+        {
+          "name": "k",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "w",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "u",
+          "index": 2,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "g",
+          "index": 3,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "inital_state",
+          "index": 4,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "cu_seqlens",
+          "index": 5,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "chunk_indices",
+          "index": 6,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "v_new",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "final_state",
+          "index": 2,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "output_final_state",
+          "dtype": "bool",
+          "value": false
+        },
+        {
+          "name": "chunk_size",
+          "dtype": "int",
+          "value": 0
+        },
+        {
+          "name": "inital_state_stride0",
+          "dtype": "int",
+          "value": 0
+        }
+      ],
+      "opMode": "dynamic",
+      "optionalInputMode": "gen_placeholder",
+      "deterministic": "ignore",
+      "optionalOutputMode": "gen_placeholder",
+      "binInfo": {
+        "jsonFilePath": "ascend910b/chunk_gated_delta_rule_fwd_h/ChunkGatedDeltaRuleFwdH_d0451c0b964d491017d89040847e9615.json"
+      }
+    },
+    {
+      "implMode": "high_performance",
+      "int64Mode": false,
+      "simplifiedKeyMode": 0,
+      "simplifiedKey": [
+        "ChunkGatedDeltaRuleFwdH/d=0,p=1/27,2/27,2/27,2/0,2/27,2/27,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=0,p=0/27,2/27,2/27,2/0,2/27,2/27,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=1/27,2/27,2/27,2/0,2/27,2/27,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=0/27,2/27,2/27,2/0,2/27,2/27,2/0,2"
+      ],
+      "staticKey": "d38cbb2036d75fed4c7b63c21b106fac375b322522c9156195f1b3c91daef822,5d3f0ecd857a3e7a0fc2463080edd8a5f74cbe875000a8b15554b2405afe7dfb",
+      "inputs": [
+        {
+          "name": "k",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "w",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "u",
+          "index": 2,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "g",
+          "index": 3,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "inital_state",
+          "index": 4,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "cu_seqlens",
+          "index": 5,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "chunk_indices",
+          "index": 6,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "v_new",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "final_state",
+          "index": 2,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "output_final_state",
+          "dtype": "bool",
+          "value": false
+        },
+        {
+          "name": "chunk_size",
+          "dtype": "int",
+          "value": 0
+        },
+        {
+          "name": "inital_state_stride0",
+          "dtype": "int",
+          "value": 0
+        }
+      ],
+      "opMode": "dynamic",
+      "optionalInputMode": "gen_placeholder",
+      "deterministic": "ignore",
+      "optionalOutputMode": "gen_placeholder",
+      "binInfo": {
+        "jsonFilePath": "ascend910b/chunk_gated_delta_rule_fwd_h/ChunkGatedDeltaRuleFwdH_da7b8be16b2775c80bb697533cd61607.json"
+      }
+    },
+    {
+      "implMode": "high_performance",
+      "int64Mode": false,
+      "simplifiedKeyMode": 0,
+      "simplifiedKey": [
+        "ChunkGatedDeltaRuleFwdH/d=0,p=1/1,2/1,2/1,2/1,2/1,2/1,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=0,p=0/1,2/1,2/1,2/1,2/1,2/1,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=1/1,2/1,2/1,2/1,2/1,2/1,2/0,2",
+        "ChunkGatedDeltaRuleFwdH/d=1,p=0/1,2/1,2/1,2/1,2/1,2/1,2/0,2"
+      ],
+      "staticKey": "a7e33ad5725618b4e3345a4badb79c2d256bbb11de22d65e3a4913e5a901ace3,4567760fa87b7e94014c786320809d6f91c0378f992e1adddb957ab6d27d15bd",
+      "inputs": [
+        {
+          "name": "k",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "w",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "u",
+          "index": 2,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "g",
+          "index": 3,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "inital_state",
+          "index": 4,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "cu_seqlens",
+          "index": 5,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "chunk_indices",
+          "index": 6,
+          "dtype": "int64",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "h",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "v_new",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "final_state",
+          "index": 2,
+          "dtype": "float32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [
+            -2
+          ],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "output_final_state",
+          "dtype": "bool",
+          "value": false
+        },
+        {
+          "name": "chunk_size",
+          "dtype": "int",
+          "value": 0
+        },
+        {
+          "name": "inital_state_stride0",
+          "dtype": "int",
+          "value": 0
+        }
+      ],
+      "opMode": "dynamic",
+      "optionalInputMode": "gen_placeholder",
+      "deterministic": "ignore",
+      "optionalOutputMode": "gen_placeholder",
+      "binInfo": {
+        "jsonFilePath": "ascend910b/chunk_gated_delta_rule_fwd_h/ChunkGatedDeltaRuleFwdH_e0b93aa62ba111fcf82ba1c4780d7ea1.json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "reference": "/data/qwen_decode_opt_20260909/gold_dynamic",
+  "candidate": "/data/qwen_decode_opt_20260909/followup_append_norm/candidate_dynamic",
+  "summary": [
+    {
+      "case": "batch2_r0",
+      "exact": true,
+      "steps": 69,
+      "tokens": [
+        256,
+        256
+      ],
+      "accepted": [
+        186,
+        187
+      ],
+      "old_median_ms": 35.55006626993418,
+      "new_median_ms": 35.370275378227234,
+      "old_mean_ms": 37.247338642676674,
+      "new_mean_ms": 35.984739273165665
+    },
+    {
+      "case": "batch2_r1",
+      "exact": true,
+      "steps": 69,
+      "tokens": [
+        256,
+        256
+      ],
+      "accepted": [
+        186,
+        187
+      ],
+      "old_median_ms": 34.844848327338696,
+      "new_median_ms": 34.73113337531686,
+      "old_mean_ms": 36.045724262172975,
+      "new_mean_ms": 37.063525058329105
+    },
+    {
+      "case": "batch3_r0",
+      "exact": true,
+      "steps": 69,
+      "tokens": [
+        256,
+        256,
+        256
+      ],
+      "accepted": [
+        186,
+        187,
+        187
+      ],
+      "old_median_ms": 41.07216373085976,
+      "new_median_ms": 40.707210544496775,
+      "old_mean_ms": 43.091181960577764,
+      "new_mean_ms": 42.219871344665684
+    },
+    {
+      "case": "batch3_r1",
+      "exact": true,
+      "steps": 69,
+      "tokens": [
+        256,
+        256,
+        256
+      ],
+      "accepted": [
+        186,
+        187,
+        187
+      ],
+      "old_median_ms": 40.63150845468044,
+      "new_median_ms": 40.348582435399294,
+      "old_mean_ms": 42.38619379078349,
+      "new_mean_ms": 42.346602492034435
+    },
+    {
+      "case": "shrink4321_r0",
+      "exact": true,
+      "steps": 69,
+      "tokens": [
+        32,
+        96,
+        176,
+        256
+      ],
+      "accepted": [
+        26,
+        73,
+        126,
+        186
+      ],
+      "old_median_ms": 34.97009025886655,
+      "new_median_ms": 35.62387730926275,
+      "old_mean_ms": 36.22625198525687,
+      "new_mean_ms": 36.7072028418382
+    },
+    {
+      "case": "shrink4321_r1",
+      "exact": true,
+      "steps": 69,
+      "tokens": [
+        32,
+        96,
+        176,
+        256
+      ],
+      "accepted": [
+        26,
+        73,
+        126,
+        186
+      ],
+      "old_median_ms": 35.27863882482052,
+      "new_median_ms": 34.6409622579813,
+      "old_mean_ms": 35.9060933192571,
+      "new_mean_ms": 35.304669477045536
+    }
+  ],
+  "errors": [],
+  "complete": true
+}

@@ -1,0 +1,194 @@
+{
+  "reference": "/data/qwen_decode_opt_20260909/followup_append_norm/control_repeat",
+  "candidate": "/data/qwen_decode_opt_20260909/followup_append_norm/reduce_short",
+  "summary": [
+    {
+      "case": "b1_r0",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600
+      ],
+      "accepted": [
+        429
+      ],
+      "old_median_ms": 28.613489121198654,
+      "new_median_ms": 28.72584108263254,
+      "old_mean_ms": 29.629795239393754,
+      "new_mean_ms": 29.470226484472338
+    },
+    {
+      "case": "b1_r1",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600
+      ],
+      "accepted": [
+        429
+      ],
+      "old_median_ms": 28.604159131646156,
+      "new_median_ms": 28.67618016898632,
+      "old_mean_ms": 29.766356913800937,
+      "new_mean_ms": 29.575354853494566
+    },
+    {
+      "case": "b1_r2",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600
+      ],
+      "accepted": [
+        429
+      ],
+      "old_median_ms": 28.433457016944885,
+      "new_median_ms": 28.698590584099293,
+      "old_mean_ms": 29.393713637862515,
+      "new_mean_ms": 29.554956066219702
+    },
+    {
+      "case": "b4_r0",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        429,
+        429
+      ],
+      "old_median_ms": 44.90500967949629,
+      "new_median_ms": 44.939860701560974,
+      "old_mean_ms": 46.10885892017102,
+      "new_mean_ms": 46.755682653892116
+    },
+    {
+      "case": "b4_r1",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        429,
+        429
+      ],
+      "old_median_ms": 44.72367838025093,
+      "new_median_ms": 44.72316801548004,
+      "old_mean_ms": 46.22908863267914,
+      "new_mean_ms": 46.01513695041215
+    },
+    {
+      "case": "b4_r2",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        429,
+        429
+      ],
+      "old_median_ms": 44.902569614350796,
+      "new_median_ms": 44.77633722126484,
+      "old_mean_ms": 46.4733939860826,
+      "new_mean_ms": 46.586381502866004
+    },
+    {
+      "case": "mixed_r0",
+      "exact": true,
+      "steps": 179,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        430,
+        420
+      ],
+      "old_median_ms": 45.139032416045666,
+      "new_median_ms": 45.24923441931605,
+      "old_mean_ms": 45.59288771603914,
+      "new_mean_ms": 46.134405199657465
+    },
+    {
+      "case": "mixed_r1",
+      "exact": true,
+      "steps": 179,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        430,
+        420
+      ],
+      "old_median_ms": 44.600251130759716,
+      "new_median_ms": 44.72283320501447,
+      "old_mean_ms": 45.59226905488793,
+      "new_mean_ms": 45.533028321669384
+    },
+    {
+      "case": "warm_b1",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600
+      ],
+      "accepted": [
+        429
+      ],
+      "old_median_ms": 28.846051543951035,
+      "new_median_ms": 28.913401998579502,
+      "old_mean_ms": 29.73272414264842,
+      "new_mean_ms": 30.639663315522746
+    },
+    {
+      "case": "warm_b4",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        429,
+        429
+      ],
+      "old_median_ms": 45.63831724226475,
+      "new_median_ms": 45.7749692723155,
+      "old_mean_ms": 47.260005565024684,
+      "new_mean_ms": 46.92979366373942
+    }
+  ],
+  "errors": [],
+  "complete": true
+}

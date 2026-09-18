@@ -1,0 +1,8 @@
+Third-party components retain their respective licenses.
+
+CUTLASS: NVIDIA/cutlass; license retained in
+ljqinfer-dsv4f-0731-tp8-a100-nvlink-sm80/ops/third_party/cutlass/LICENSE.
+
+Ascend native aclnn_torch_adapter includes code adapted from Ascend/pytorch
+and vllm-project/vllm-ascend. Original copyright headers are retained;
+LICENSE.pytorch and LICENSE.vllm-ascend are included beside the adapter.

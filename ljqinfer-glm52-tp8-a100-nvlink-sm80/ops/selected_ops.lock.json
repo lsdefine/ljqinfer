@@ -1,0 +1,190 @@
+{
+  "format": 1,
+  "selection": {
+    "iq": "iq_moe_rank_v12_shared_tn",
+    "down_cache": "moe_q6_down_cache_v1",
+    "q8": "q8_cublas",
+    "q8lin": "q8_linear",
+    "flash": "flash_mla_tp",
+    "prefill_attn": "prefill_attn_v4_batchq2",
+    "special_ext": "special_moe_rank_v5",
+    "special_quant": "special_quantized_decode_v1",
+    "route": "decode_moe_route_q13",
+    "q6": "q6_lookup",
+    "decode_attn": "nova_b512_tn_rowbase_staticfrag",
+    "residual_add_copy": "residual_add_copy_b2q2",
+    "peer_ar": "peer_ar_os_v4"
+  },
+  "environment": {
+    "python": "3.13.9",
+    "torch": "2.8.0+cu128",
+    "cuda": "12.8"
+  },
+  "operators": {
+    "iq": {
+      "implementation": "iq_moe_rank_v12_shared_tn",
+      "module_name": "ljq_iq_moe_rank_v12_shared_tn_ff32779d04280f13",
+      "recipe_id": "ff32779d04280f13",
+      "artifact": "artifacts/ljq_iq_moe_rank_v12_shared_tn_ff32779d04280f13-3d3d80e82783b5c0.so",
+      "sha256": "3d3d80e82783b5c0d89c1048da067eaf8ab2843eded69977e34008b47894d9a1",
+      "abi": [
+        "dispatch_meta",
+        "moe_rank_forward_v10_scatter",
+        "moe_rank_forward_decode_fused",
+        "shared_decode_q8_inplace"
+      ]
+    },
+    "down_cache": {
+      "implementation": "moe_q6_down_cache_v1",
+      "module_name": "ljq_moe_q6_down_cache_v1_8082a08caad6b85e",
+      "recipe_id": "8082a08caad6b85e",
+      "artifact": "artifacts/ljq_moe_q6_down_cache_v1_8082a08caad6b85e-9546ef2e3f94a24b.so",
+      "sha256": "9546ef2e3f94a24b03547facc738f810f6354e6897794f3bea4a0eaa2e38b6c6",
+      "abi": [
+        "dequant_selected",
+        "decode"
+      ]
+    },
+    "q8": {
+      "implementation": "q8_cublas",
+      "module_name": "ljq_q8_cublas_bcea638f87db9c67",
+      "recipe_id": "bcea638f87db9c67",
+      "artifact": "artifacts/ljq_q8_cublas_bcea638f87db9c67-2f322d6ce723e4e6.so",
+      "sha256": "2f322d6ce723e4e62d7f0b677feeb2454b9e0e90dcbaf38e4034dd588e27cb93",
+      "abi": [
+        "forward",
+        "forward_out",
+        "clear_weight_cache",
+        "pin_weight_cache"
+      ]
+    },
+    "q8lin": {
+      "implementation": "q8_linear",
+      "module_name": "ljq_q8_linear_b187c9d82cd1171c",
+      "recipe_id": "b187c9d82cd1171c",
+      "artifact": "artifacts/ljq_q8_linear_b187c9d82cd1171c-2f57a8b1596a1175.so",
+      "sha256": "2f57a8b1596a1175a8ae38d501a2f7167e63d1b274e1c68d143eef0df1926b6f",
+      "abi": [
+        "forward"
+      ]
+    },
+    "flash": {
+      "implementation": "flash_mla_tp",
+      "module_name": "ljq_flash_mla_tp_84ecb6ff7beba7f8",
+      "recipe_id": "84ecb6ff7beba7f8",
+      "artifact": "artifacts/ljq_flash_mla_tp_84ecb6ff7beba7f8-aee2c8336fb73d8f.so",
+      "sha256": "aee2c8336fb73d8ff88587ca42c742320d4713c4d0231fe35598788960e0ef6d",
+      "abi": [
+        "forward"
+      ]
+    },
+    "prefill_attn": {
+      "implementation": "prefill_attn_v4_batchq2",
+      "module_name": "ljq_prefill_attn_v4_batchq2_22d9bf1a19aac875",
+      "recipe_id": "22d9bf1a19aac875",
+      "artifact": "artifacts/ljq_prefill_attn_v4_batchq2_22d9bf1a19aac875-d9124033da3354c5.so",
+      "sha256": "d9124033da3354c5cbb60a1182129edb78ac6109e50a47d4b2e31981052f68ef",
+      "abi": [
+        "forward_rank_paged_inplace_tc",
+        "forward_rank_paged_batch_q2_k0"
+      ]
+    },
+    "special_ext": {
+      "implementation": "special_moe_rank_v5",
+      "module_name": "ljq_special_moe_rank_v5_47d5f5b0c1ac754e",
+      "recipe_id": "47d5f5b0c1ac754e",
+      "artifact": "artifacts/ljq_special_moe_rank_v5_47d5f5b0c1ac754e-e9783e13d2685720.so",
+      "sha256": "e9783e13d2685720cc448ce499954a9b3cfee59a496e66b3a4f1040188ddf48f",
+      "abi": [
+        "dequant_k",
+        "special_moe_rank_forward_v5"
+      ]
+    },
+    "special_quant": {
+      "implementation": "special_quantized_decode_v1",
+      "module_name": "ljq_special_quantized_decode_v1_099d9de478645c1c",
+      "recipe_id": "099d9de478645c1c",
+      "artifact": "artifacts/ljq_special_quantized_decode_v1_099d9de478645c1c-1884d4c1335229d2.so",
+      "sha256": "1884d4c1335229d26de3339b9a515c82eb54aaf9899a1b92ea0140cd0494de9c",
+      "abi": [
+        "special_iq4xs_q5k",
+        "special_iq3xxs_q6k",
+        "special_q3k_q4k"
+      ]
+    },
+    "route": {
+      "implementation": "decode_moe_route_q13",
+      "module_name": "ljq_decode_moe_route_q13_65c87dc498208488",
+      "recipe_id": "65c87dc498208488",
+      "artifact": "artifacts/ljq_decode_moe_route_q13_65c87dc498208488-2fcfe1ab1c95a043.so",
+      "sha256": "2fcfe1ab1c95a043f09d62f3f299f3474c24f44dc61c08915e04dc89e868a08a",
+      "abi": [
+        "moe_route_t1_cuda",
+        "decode_moe_route_probs_q13_cuda"
+      ]
+    },
+    "q6": {
+      "implementation": "q6_lookup",
+      "module_name": "ljq_q6_lookup_4a86713fafe23a72",
+      "recipe_id": "4a86713fafe23a72",
+      "artifact": "artifacts/ljq_q6_lookup_4a86713fafe23a72-91cb142dadbbb0a1.so",
+      "sha256": "91cb142dadbbb0a14234d377ea44b217d4328f9d9892ad466665183e0cfd41a6",
+      "abi": [
+        "lookup",
+        "matvec",
+        "dequant_fp16_out",
+        "gemm_fp16_out"
+      ]
+    },
+    "decode_attn": {
+      "implementation": "nova_b512_tn_rowbase_staticfrag",
+      "module_name": "ljq_nova_b512_tn_rowbase_staticfrag_a4953cf1d77be689",
+      "recipe_id": "a4953cf1d77be689",
+      "artifact": "artifacts/ljq_nova_b512_tn_rowbase_staticfrag_a4953cf1d77be689-1bc620bbe818a32b.so",
+      "sha256": "1bc620bbe818a32b27096efc7a1865db2821586a55d822a9694762b373d7df88",
+      "abi": [
+        "forward_rank_paged_batch_k0",
+        "forward_rank_paged_batch_k0_projected",
+        "rms_norm_half_out"
+      ]
+    },
+    "residual_add_copy": {
+      "implementation": "residual_add_copy_b2q2",
+      "module_name": "ljq_residual_add_copy_b2q2_765d9d1e0a26abc8",
+      "recipe_id": "765d9d1e0a26abc8",
+      "artifact": "artifacts/ljq_residual_add_copy_b2q2_765d9d1e0a26abc8-fe42efc60245f5ec.so",
+      "sha256": "fe42efc60245f5ec644cd8fcbac67e8c6dba52caa3921f0826dec11af069a3d0",
+      "abi": [
+        "forward",
+        "fused_add_rmsnorm",
+        "combine_moe_f32_to_f16"
+      ]
+    },
+    "peer_ar": {
+      "implementation": "peer_ar_os_v4",
+      "module_name": "ljq_peer_ar_os_v4_55fa4a5f007691f9",
+      "recipe_id": "55fa4a5f007691f9",
+      "artifact": "artifacts/ljq_peer_ar_os_v4_55fa4a5f007691f9-e86664674334c80f.so",
+      "sha256": "e86664674334c80f3562432180237db02807f0abae1fd6ea5c006ff4b3c8b2de",
+      "abi": [
+        "peer_ar_register",
+        "peer_ar_unregister",
+        "peer_ar_run",
+        "latent_gather_register",
+        "latent_gather_run",
+        "latent_gather_unregister",
+        "peer_meta_bcast_register",
+        "peer_meta_bcast_run",
+        "peer_gather_bf16_register",
+        "peer_gather_bf16_run",
+        "peer_gather_bf16_unregister",
+        "peer_bcast_fp16_register",
+        "peer_bcast_fp16_run",
+        "peer_bcast_fp16_unregister",
+        "peer_argmax_register",
+        "peer_argmax_run",
+        "peer_argmax_unregister"
+      ]
+    }
+  }
+}

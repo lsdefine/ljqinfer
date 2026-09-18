@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(ljq_batch_aiv_kernels LANGUAGES C CXX)
+set(ASCEND_CANN_PACKAGE_PATH /usr/local/Ascend/cann-9.0.1 CACHE PATH "CANN root")
+set(SOC_VERSION Ascend910B3)
+set(RUN_MODE npu)
+set(CMAKE_BUILD_TYPE Release)
+include(${ASCEND_CANN_PACKAGE_PATH}/compiler/tikcpp/ascendc_kernel_cmake/ascendc.cmake)
+ascendc_library(ljq_gdn_recurrent_b1_baseptr_aiv SHARED ${CMAKE_CURRENT_LIST_DIR}/../gdn_recurrent_b1_baseptr.cpp)

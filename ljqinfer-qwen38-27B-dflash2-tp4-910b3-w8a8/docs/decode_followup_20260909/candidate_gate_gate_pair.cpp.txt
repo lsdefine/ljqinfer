@@ -1,0 +1,30 @@
+#include "kernel_operator.h"
+using namespace AscendC;
+constexpr uint32_t D=128;
+extern "C" __global__ __aicore__ void gate_pair(GM_ADDR norm,GM_ADDR z,GM_ADDR output,uint32_t rows,uint32_t zs){
+    GlobalTensor<bfloat16_t> gn,gz,go;
+    gn.SetGlobalBuffer((__gm__ bfloat16_t*)norm); gz.SetGlobalBuffer((__gm__ bfloat16_t*)z); go.SetGlobalBuffer((__gm__ bfloat16_t*)output);
+    TPipe pipe; TBuf<TPosition::VECCALC> nb,zb,fb,ob;
+    pipe.InitBuffer(nb,D*2); pipe.InitBuffer(zb,D*2); pipe.InitBuffer(fb,4*D*4); pipe.InitBuffer(ob,D*2);
+    auto n=nb.Get<bfloat16_t>(); auto zt=zb.Get<bfloat16_t>(); auto f=fb.Get<float>(); auto o=ob.Get<bfloat16_t>();
+    for(uint32_t row=GetBlockIdx();row<rows;row+=GetBlockNum()){
+        uint32_t zi=(row/12)*zs+(row%12)*D;
+        DataCopy(n,gn[row*D],D); DataCopy(zt,gz[zi],D); PipeBarrier<PIPE_ALL>();
+        Cast(f,n,RoundMode::CAST_NONE,D); Cast(f[D],zt,RoundMode::CAST_NONE,D); PipeBarrier<PIPE_ALL>();
+        Muls(f[2*D],f[D],-1.0f,D); PipeBarrier<PIPE_ALL>();
+        Exp(f[2*D],f[2*D],D); PipeBarrier<PIPE_ALL>();
+        Adds(f[2*D],f[2*D],1.0f,D); PipeBarrier<PIPE_ALL>();
+        Div(f[3*D],f[D],f[2*D],D); PipeBarrier<PIPE_ALL>();
+        Mul(f,f,f[3*D],D); PipeBarrier<PIPE_ALL>();
+        Cast(o,f,RoundMode::CAST_RINT,D); PipeBarrier<PIPE_ALL>();
+        SetFlag<HardEvent::V_MTE3>(EVENT_ID0); WaitFlag<HardEvent::V_MTE3>(EVENT_ID0);
+        DataCopy(go[row*D],o,D);
+        SetFlag<HardEvent::MTE3_V>(EVENT_ID0); WaitFlag<HardEvent::MTE3_V>(EVENT_ID0);
+    }
+}
+extern "C" int gate_pair_launch(void* stream,void* norm,void* z,void* out,uint32_t rows,uint32_t zs){
+    if(!rows || rows%12 || zs<1536) return -1;
+    uint32_t blocks=rows<40?rows:40;
+    gate_pair<<<blocks,nullptr,stream>>>((uint8_t*)norm,(uint8_t*)z,(uint8_t*)out,rows,zs);
+    return 0;
+}

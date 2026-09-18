@@ -1,0 +1,24 @@
+# Generated products and local model data
+__pycache__/
+*.py[cod]
+*.so
+*.so.*
+*.o
+*.a
+*.dll
+*.pyd
+*.npubin
+*.cubin
+*.fatbin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.tar
+*.tar.gz
+*.zip
+*.log
+.build/
+.runtime/
+.pytest_cache/

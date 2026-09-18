@@ -1,0 +1,51 @@
+--- a/model/decode_graph.py
++++ b/model/decode_graph.py
+@@ -198,4 +198 @@
+-        torch.add(gathered[0], gathered[1], out=tensor)
+-        tensor.add_(gathered[3])
+-        tensor.add_(gathered[2])
+-        return tensor
++        return K.tp4_ordered_sum(gathered, tensor)
+--- a/ops/kernels.py
++++ b/ops/kernels.py
+@@ -584,0 +585,23 @@
++    def tp4_ordered_sum(self, gathered, out):
++        """TP4 BF16 sum in exact ((rank0+rank1)+rank3)+rank2 order."""
++        torch = self._torch()
++        if not (out.device.type == "npu" and gathered.device == out.device
++                and gathered.dtype == out.dtype == torch.bfloat16
++                and out.ndim == 2 and out.shape[0] in (16, 24, 32)
++                and out.shape[1] == 5120
++                and gathered.numel() == 4 * out.numel()
++                and out.is_contiguous() and gathered.is_contiguous()):
++            raise ValueError("tp4_ordered_sum requires contiguous BF16 TP4 B2-B4 Q8 hidden")
++        fn = getattr(self, "_tp4_ordered_sum_fn", None)
++        if fn is None:
++            lib = ctypes.CDLL(str(Path(__file__).resolve().parent / "native" / "ljq_tp4_ordered_sum.so"))
++            fn = lib.tp4_ordered_sum_launch
++            fn.argtypes = [ctypes.c_void_p] * 3 + [ctypes.c_uint32]
++            fn.restype = ctypes.c_int
++            self._tp4_ordered_sum_fn = fn
++        rc = fn(torch.npu.current_stream(out.device)._as_parameter_,
++                ctypes.c_void_p(gathered.data_ptr()), ctypes.c_void_p(out.data_ptr()), out.numel())
++        if rc != 0:
++            raise RuntimeError(f"tp4_ordered_sum launch failed: {rc}")
++        return out
++
+--- a/tests/test_hot_path_contract.py
++++ b/tests/test_hot_path_contract.py
+@@ -25,3 +25,11 @@
+-        self.assertIn("torch.add(gathered[0], gathered[1], out=tensor)", collective)
+-        self.assertIn("tensor.add_(gathered[3])", collective)
+-        self.assertIn("tensor.add_(gathered[2])", collective)
++        self.assertIn("K.tp4_ordered_sum(gathered, tensor)", collective)
++        self.assertNotIn("all_reduce_comm", collective)
++        fused = Path("ops/ascendc/tp4_ordered_sum.cpp").read_text()
++        body = fused.split("__aicore__", 1)[1]
++        adds = [line.strip() for line in body.splitlines() if "Add(f," in line]
++        self.assertEqual([a.split(";")[0] for a in adds], [
++            "Add(f,f,f[TILE],TILE)", "Add(f,f,f[3*TILE],TILE)", "Add(f,f,f[2*TILE],TILE)"])
++        self.assertEqual(body.count("RoundMode::CAST_RINT"), 3)
++        guard = kernels.split("def tp4_ordered_sum", 1)[1].split("    def ", 1)[0]
++        self.assertIn("bfloat16", guard)
++        self.assertIn("out.shape[0] in (16, 24, 32)", guard)

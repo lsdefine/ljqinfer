@@ -1,0 +1,69 @@
+{
+  "scope": "Qwen3 TP4 self-built decode engine; GDN causal conv kernel optimization",
+  "production_repo": "/data/ljqinfer_qwen_tp4; optimized artifact installed and inference accepted",
+  "change": "ops/ascendc/gdn_conv_vec.cpp: batch-row parallel block mapping (block owns one (row, channel-tile)), pure-AIV build; disjoint writes",
+  "build_entry": "candidate_conv_aiv/ops/ascendc/build_conv_aiv.sh + conv_aiv/CMakeLists.txt (build only, refuses existing dir, no auto-install)",
+  "reproducible_build": "fresh build sha256 fb0a4f99...fbee1 identical to validated SO",
+  "correctness": {
+    "micro": "8 cases B1-B4 x stride 2560/4096 bitwise equal to original kernel",
+    "full_model_short": "10 cases x 4 ranks exact trajectories (tokens/accepted/steps/commit/target/geometry)",
+    "long_context": "6 cases (2040/8190/16370, repeated) x 4 ranks exact",
+    "dynamic_batch": "6 cases x 4 ranks exact; observed shrink 4->3->2->1",
+    "cold_restart_repeat": "short suite re-run in a fresh process, still exact"
+  },
+  "performance_median_ms_per_spec_round": {
+    "b1_r": {
+      "baseline_runs": [
+        29.029562138020992,
+        29.056863859295845,
+        29.17043399065733
+      ],
+      "candidate_runs": [
+        28.898541815578938,
+        28.944741934537888,
+        28.95620185881853
+      ],
+      "baseline_median": 29.056863859295845,
+      "candidate_median": 28.944741934537888,
+      "delta_pct": -0.3858707027051975
+    },
+    "b4_r": {
+      "baseline_runs": [
+        46.09192069619894,
+        46.147022396326065,
+        46.220483258366585
+      ],
+      "candidate_runs": [
+        44.96371001005173,
+        45.00420019030571,
+        45.02986930310726
+      ],
+      "baseline_median": 46.147022396326065,
+      "candidate_median": 45.00420019030571,
+      "delta_pct": -2.4764809226593556
+    },
+    "mixed_r": {
+      "baseline_runs": [
+        45.996970031410456,
+        46.3685542345047
+      ],
+      "candidate_runs": [
+        44.896898325532675,
+        45.279817655682564
+      ],
+      "baseline_median": 46.18276213295758,
+      "candidate_median": 45.08835799060762,
+      "delta_pct": -2.3697243122861087
+    }
+  },
+  "rejected": "earlier mixed AIC/AIV candidate: full-model divergence and error 507011; root cause unconfirmed; discarded",
+  "no_gain": "top-1 argmax fast path: no measurable gain",
+  "evidence_dir": "/data/qwen_decode_opt_20260909/evidence",
+  "baseline_repo": "e20dc88 (pre-install baseline)",
+  "production_acceptance": {
+    "health": "engine62001/API8000 ok",
+    "provider": "all four ranks map installed SO",
+    "inference": "B1 nonstream, SSE DONE, four concurrent same-prompt requests; 160 completion tokens each",
+    "evidence": "/data/qwen_decode_opt_20260909/evidence/production_inference_acceptance.json"
+  }
+}

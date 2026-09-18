@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+.env
+build/
+dist/
+.incoming/
+.vendor/
+vendor_wheels/
+fusion_result.json
+*.o
+
+# Runtime state and generated accelerator/profile caches
+.runtime/
+export_only_prof_dir/
+kernel_meta/
+extra-info/

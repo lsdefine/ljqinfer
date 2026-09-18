@@ -1,0 +1,194 @@
+{
+  "reference": "/data/qwen_decode_opt_20260909/followup_append_norm/control_repeat",
+  "candidate": "/data/qwen_decode_opt_20260909/followup_append_norm/gate_short",
+  "summary": [
+    {
+      "case": "b1_r0",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600
+      ],
+      "accepted": [
+        429
+      ],
+      "old_median_ms": 28.613489121198654,
+      "new_median_ms": 28.722680173814297,
+      "old_mean_ms": 29.629795239393754,
+      "new_mean_ms": 30.246408141409017
+    },
+    {
+      "case": "b1_r1",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600
+      ],
+      "accepted": [
+        429
+      ],
+      "old_median_ms": 28.604159131646156,
+      "new_median_ms": 28.57349906116724,
+      "old_mean_ms": 29.766356913800937,
+      "new_mean_ms": 29.68813354577522
+    },
+    {
+      "case": "b1_r2",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600
+      ],
+      "accepted": [
+        429
+      ],
+      "old_median_ms": 28.433457016944885,
+      "new_median_ms": 28.570059686899185,
+      "old_mean_ms": 29.393713637862515,
+      "new_mean_ms": 29.511418598501578
+    },
+    {
+      "case": "b4_r0",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        429,
+        429
+      ],
+      "old_median_ms": 44.90500967949629,
+      "new_median_ms": 45.26576306670904,
+      "old_mean_ms": 46.10885892017102,
+      "new_mean_ms": 47.080672571655384
+    },
+    {
+      "case": "b4_r1",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        429,
+        429
+      ],
+      "old_median_ms": 44.72367838025093,
+      "new_median_ms": 45.16757186502218,
+      "old_mean_ms": 46.22908863267914,
+      "new_mean_ms": 46.79254750773218
+    },
+    {
+      "case": "b4_r2",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        429,
+        429
+      ],
+      "old_median_ms": 44.902569614350796,
+      "new_median_ms": 44.95391994714737,
+      "old_mean_ms": 46.4733939860826,
+      "new_mean_ms": 46.09638041243975
+    },
+    {
+      "case": "mixed_r0",
+      "exact": true,
+      "steps": 179,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        430,
+        420
+      ],
+      "old_median_ms": 45.139032416045666,
+      "new_median_ms": 45.82927422598004,
+      "old_mean_ms": 45.59288771603914,
+      "new_mean_ms": 46.51451017707586
+    },
+    {
+      "case": "mixed_r1",
+      "exact": true,
+      "steps": 179,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        430,
+        420
+      ],
+      "old_median_ms": 44.600251130759716,
+      "new_median_ms": 45.06852151826024,
+      "old_mean_ms": 45.59226905488793,
+      "new_mean_ms": 45.6358573947321
+    },
+    {
+      "case": "warm_b1",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600
+      ],
+      "accepted": [
+        429
+      ],
+      "old_median_ms": 28.846051543951035,
+      "new_median_ms": 28.95177248865366,
+      "old_mean_ms": 29.73272414264842,
+      "new_mean_ms": 30.28848287736222
+    },
+    {
+      "case": "warm_b4",
+      "exact": true,
+      "steps": 170,
+      "tokens": [
+        600,
+        600,
+        600,
+        600
+      ],
+      "accepted": [
+        429,
+        429,
+        429,
+        429
+      ],
+      "old_median_ms": 45.63831724226475,
+      "new_median_ms": 45.72655912488699,
+      "old_mean_ms": 47.260005565024684,
+      "new_mean_ms": 47.99828832240208
+    }
+  ],
+  "errors": [],
+  "complete": true
+}

@@ -1,0 +1,39 @@
+#include "kernel_operator.h"
+using namespace AscendC;
+constexpr uint32_t TILE=1024;
+extern "C" __global__ __aicore__ void tp4_ordered_sum(GM_ADDR input, GM_ADDR output, uint32_t count) {
+    GlobalTensor<bfloat16_t> gi,go;
+    gi.SetGlobalBuffer((__gm__ bfloat16_t*)input,4ull*count);
+    go.SetGlobalBuffer((__gm__ bfloat16_t*)output,count);
+    TPipe pipe;
+    TBuf<TPosition::VECCALC> ib,fb,rb;
+    pipe.InitBuffer(ib,4*TILE*sizeof(bfloat16_t));
+    pipe.InitBuffer(fb,4*TILE*sizeof(float));
+    pipe.InitBuffer(rb,TILE*sizeof(bfloat16_t));
+    auto in=ib.Get<bfloat16_t>(); auto f=fb.Get<float>(); auto r=rb.Get<bfloat16_t>();
+    for(uint32_t offset=GetBlockIdx()*TILE;offset<count;offset+=GetBlockNum()*TILE){
+        for(uint32_t rank=0;rank<4;++rank) DataCopy(in[rank*TILE],gi[rank*(uint64_t)count+offset],TILE);
+        PipeBarrier<PIPE_ALL>();
+        for(uint32_t rank=0;rank<4;++rank){
+            Cast(f[rank*TILE],in[rank*TILE],RoundMode::CAST_NONE,TILE);
+            PipeBarrier<PIPE_ALL>();
+        }
+        Add(f,f,f[TILE],TILE); PipeBarrier<PIPE_ALL>();
+        Cast(r,f,RoundMode::CAST_RINT,TILE); PipeBarrier<PIPE_ALL>();
+        Cast(f,r,RoundMode::CAST_NONE,TILE); PipeBarrier<PIPE_ALL>();
+        Add(f,f,f[3*TILE],TILE); PipeBarrier<PIPE_ALL>();
+        Cast(r,f,RoundMode::CAST_RINT,TILE); PipeBarrier<PIPE_ALL>();
+        Cast(f,r,RoundMode::CAST_NONE,TILE); PipeBarrier<PIPE_ALL>();
+        Add(f,f,f[2*TILE],TILE); PipeBarrier<PIPE_ALL>();
+        Cast(r,f,RoundMode::CAST_RINT,TILE); PipeBarrier<PIPE_ALL>();
+        SetFlag<HardEvent::V_MTE3>(EVENT_ID0); WaitFlag<HardEvent::V_MTE3>(EVENT_ID0);
+        DataCopy(go[offset],r,TILE);
+        SetFlag<HardEvent::MTE3_V>(EVENT_ID0); WaitFlag<HardEvent::MTE3_V>(EVENT_ID0);
+    }
+}
+extern "C" int tp4_ordered_sum_launch(void* stream,void* input,void* output,uint32_t count){
+    if(count==0 || count%TILE) return -1;
+    uint32_t blocks=count/TILE; if(blocks>40) blocks=40;
+    tp4_ordered_sum<<<blocks,nullptr,stream>>>((uint8_t*)input,(uint8_t*)output,count);
+    return 0;
+}

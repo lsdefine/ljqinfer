@@ -1,0 +1,44 @@
+--- a/model/dflash2.py
++++ b/model/dflash2.py
+@@ -682,2 +682,2 @@
+-    def _project_kv(self, hidden, positions, layer: DraftLayer):
+-        h = _rms(hidden, self.hidden_norm)
++    def _project_normalized_kv(self, h, positions, layer: DraftLayer):
++        """Project shared hidden-normalized context into one layer's KV."""
+@@ -708,0 +709 @@
++        h = _rms(h, self.hidden_norm)
+@@ -710 +711 @@
+-            key, value = self._project_kv(h, positions, layer)
++            key, value = self._project_normalized_kv(h, positions, layer)
+@@ -718,0 +720 @@
++        h = _rms(h, self.hidden_norm)
+@@ -720 +722 @@
+-            key, value = self._project_kv(h, positions, layer)
++            key, value = self._project_normalized_kv(h, positions, layer)
+--- a/tests/test_hot_path_contract.py
++++ b/tests/test_hot_path_contract.py
+@@ -73,0 +74,24 @@
++    def test_dflash_append_normalizes_shared_hidden_once(self):
++        import ast
++        tree = ast.parse(Path("model/dflash2.py").read_text())
++        methods = {node.name: node for node in ast.walk(tree)
++                   if isinstance(node, ast.FunctionDef) and node.name in (
++                       "_project_normalized_kv", "append_context", "_append_graph_forward")}
++        self.assertEqual(len(methods), 3)
++        for name in ("append_context", "_append_graph_forward"):
++            method = methods[name]
++            norms = [node for node in ast.walk(method)
++                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
++                     and node.func.id == "_rms"]
++            self.assertEqual(len(norms), 1)
++            loops = [node for node in method.body if isinstance(node, ast.For)]
++            self.assertEqual(len(loops), 1)
++            self.assertLess(norms[0].lineno, loops[0].lineno)
++            self.assertTrue(any(isinstance(node, ast.Call)
++                                and isinstance(node.func, ast.Attribute)
++                                and node.func.attr == "_project_normalized_kv"
++                                for node in ast.walk(loops[0])))
++        projection = methods["_project_normalized_kv"]
++        self.assertFalse(any(isinstance(node, ast.Attribute) and node.attr == "hidden_norm"
++                             for node in ast.walk(projection)))
++

@@ -1,0 +1,24 @@
+ops/*.bak_*
+__pycache__/
+*.pyc
+
+# local A/B experiment artifacts (kept on disk, not tracked)
+a*_ab.sh
+a*_ab.log
+a*_gate.log
+*.bak_*
+
+# JIT compile cache (machine/arch specific, must not travel with the folder)
+ops/.build/
+
+# experiment / profiling output (kept on disk, never tracked)
+logs/
+*.log
+
+# never commit hand-made backups -- git IS the backup
+*.bak
+*.orig
+*.old
+*~
+*.save
+*.backup

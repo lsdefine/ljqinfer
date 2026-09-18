@@ -1,0 +1,30 @@
+--- a/ops/kernels.py
++++ b/ops/kernels.py
+@@ -584,0 +585,19 @@
++    def _gate_pair(self, normed, z):
++        # Preserve the native RMSNorm BF16 boundary; consume strided packed z.
++        torch = self._torch()
++        fn = getattr(self, "_gate_pair_fn", None)
++        if fn is None:
++            lib = ctypes.CDLL(str(Path(__file__).resolve().parent / "native" / "ljq_gate_pair.so"))
++            fn = lib.gate_pair_launch
++            fn.argtypes = [ctypes.c_void_p] * 4 + [ctypes.c_uint32] * 2
++            fn.restype = ctypes.c_int
++            self._gate_pair_lib = lib
++            self._gate_pair_fn = fn
++        out = torch.empty_like(normed)
++        rc = fn(torch.npu.current_stream(normed.device)._as_parameter_,
++                normed.data_ptr(), z.data_ptr(), out.data_ptr(),
++                normed.numel() // 128, z.stride(0))
++        if rc:
++            raise RuntimeError(f"gate_pair launch failed: {rc}")
++        return out
++
+@@ -590,0 +610,7 @@
++            if (normed.dtype == z.dtype == torch.bfloat16
++                    and normed.ndim == 3 and tuple(normed.shape[1:]) == (12, 128)
++                    and normed.shape[0] in (8, 16, 24, 32)
++                    and z.shape == normed.shape and z.device == normed.device
++                    and normed.is_contiguous() and z.stride(1) == 128
++                    and z.stride(2) == 1 and z.stride(0) >= 1536):
++                return self._gate_pair(normed, z)

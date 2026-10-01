@@ -20,7 +20,7 @@ from server.service import ServiceError, ServiceLayer
 API_KEY = os.environ.get("LJQINFER_API_KEY", "dummy_key")
 MODEL_NAME = os.environ.get("LJQINFER_MODEL_NAME", "qwen3.8-27b")
 ENGINE_URL = os.environ.get("LJQINFER_ENGINE_URL", "http://127.0.0.1:62001")
-HEARTBEAT_SECONDS = float(os.environ.get("LJQINFER_SSE_HEARTBEAT_SECONDS", "15"))
+HEARTBEAT_SECONDS = float(os.environ.get("LJQINFER_SSE_HEARTBEAT_SECONDS", "10"))
 
 _state: Dict[str, Any] = {"layer": None}
 
@@ -45,7 +45,7 @@ class ChatCompletionRequest(BaseModel):
     stream_options: Optional[Dict[str, Any]] = None
     tools: Optional[List[dict]] = None
     tool_choice: Optional[Union[str, dict]] = None
-    temperature: Optional[float] = None
+    temperature: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     top_p: Optional[float] = None
     # OpenAI-compatible reasoning controls.  GenericAgent sends
     # reasoning_effort="none" for its non-thinking Qwen backend; this must not
@@ -145,7 +145,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     messages, max_tokens,
                     tools=body.tools, tool_choice=body.tool_choice,
                     reasoning_effort=body.reasoning_effort,
-                    thinking=body.thinking))
+                    thinking=body.thinking, temperature=1.0 if body.temperature is None else body.temperature))
         except ServiceError as exc:
             return _openai_error_response(502, "server_error", str(exc))
         except ValueError as exc:
@@ -168,7 +168,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     messages, max_tokens,
                     tools=body.tools, tool_choice=body.tool_choice,
                     model=model, reasoning_effort=body.reasoning_effort,
-                    thinking=body.thinking):
+                    thinking=body.thinking, temperature=1.0 if body.temperature is None else body.temperature):
                 if disconnected.is_set():
                     break
                 bridge.put(event)
@@ -224,15 +224,19 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 if event.get("type") == "message_stop":
                     yield b"data: [DONE]\n\n"
                     return
-                try:
-                    with anyio.fail_after(HEARTBEAT_SECONDS):
-                        event = await anyio.to_thread.run_sync(bridge.get)
-                except TimeoutError:
-                    if await request.is_disconnected():
-                        disconnected.set()
+                # Bound the blocking operation itself: run_sync shields cancellation,
+                # so fail_after around an unbounded Queue.get cannot emit heartbeats.
+                # Stay here after a heartbeat; never feed the previous event twice.
+                while True:
+                    try:
+                        event = await anyio.to_thread.run_sync(
+                            bridge.get, True, HEARTBEAT_SECONDS)
                         break
-                    yield b": keepalive\n\n"
-                    continue
+                    except pyqueue.Empty:
+                        if await request.is_disconnected():
+                            disconnected.set()
+                            return
+                        yield b": keepalive\n\n"
                 if event is sentinel:
                     break
         finally:
@@ -432,9 +436,9 @@ async def messages_api(request: Request):
             try:
                 while True:
                     try:
-                        with anyio.fail_after(HEARTBEAT_SECONDS):
-                            event = await anyio.to_thread.run_sync(bridge.get)
-                    except TimeoutError:
+                        event = await anyio.to_thread.run_sync(
+                            bridge.get, True, HEARTBEAT_SECONDS)
+                    except pyqueue.Empty:
                         if await request.is_disconnected():
                             disconnected.set()
                             break

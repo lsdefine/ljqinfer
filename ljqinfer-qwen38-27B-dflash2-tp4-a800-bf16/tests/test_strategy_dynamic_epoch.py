@@ -60,7 +60,8 @@ class _FakeModel:
 
     def decode_dflash_batch_dynamic(
             self, state, limits, *, cancel_events, on_tokens,
-            board_request, on_boarded, boarding_interval_steps):
+            board_request, on_boarded, boarding_interval_steps, temperature=0.0):
+        self.anchor_temperature = temperature
         self.decode_entered_at = time.perf_counter()
         self.decode_entered.set()
         requests = []
@@ -78,6 +79,7 @@ class _FakeModel:
             if request is not None:
                 requests.append(request)
                 on_boarded(len(requests), 1 + len(requests))
+        self.boarded_temperatures = [r.temperature for r in requests]
         if self.fail_after_board:
             raise RuntimeError("decode boom")
         rows = []
@@ -123,7 +125,8 @@ class DynamicEpochStrategyTest(unittest.TestCase):
     def test_queued_requests_board_same_epoch_and_keep_event_ownership(self):
         model = _FakeModel()
         strategy = Strategy(model)
-        queues = [strategy.query((row + 1, row + 2), 2) for row in range(3)]
+        queues = [strategy.query((row + 1, row + 2), 2, temperature=t)
+                  for row, t in enumerate((0.0, 1.0, 0.7))]
         self.assertTrue(model.prefill_entered.wait(2))
         model.allow_decode.set()
         events = [self._drain(queue) for queue in queues]
@@ -133,6 +136,8 @@ class DynamicEpochStrategyTest(unittest.TestCase):
                          [["prefill", "token", "end"]] * 3)
         self.assertEqual([row[1]["token_ids"] for row in events],
                          [[100], [101], [102]])
+        self.assertEqual(model.anchor_temperature, 0.0)
+        self.assertEqual(model.boarded_temperatures, [1.0, 0.7])
         self.assertEqual([queue.metrics.active_batch_size for queue in queues],
                          [1, 2, 3])
         self.assertEqual(strategy._pending, 0)

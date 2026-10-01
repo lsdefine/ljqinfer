@@ -20,6 +20,7 @@ class GenerateRequest(BaseModel):
     request_id: Optional[str] = None
     input_ids: list[int] = Field(min_length=1)
     max_new_tokens: int = Field(default=64, ge=0, le=16384)
+    temperature: float = Field(default=1.0, ge=0, allow_inf_nan=False)
 
 
 @asynccontextmanager
@@ -93,7 +94,7 @@ def generate(request: GenerateRequest):
         strategy.validate_request(request.input_ids, request.max_new_tokens)
         queue = strategy.query(
             request.input_ids, request.max_new_tokens,
-            request_id=request.request_id)
+            request_id=request.request_id, temperature=request.temperature)
         return StreamingResponse(
             _event_stream(queue, queue.request_id),
             media_type="application/x-ndjson",

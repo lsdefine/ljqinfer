@@ -115,6 +115,7 @@ class _Job:
     n_new: int
     out: Queue
     handle: _CancelHandle
+    temperature: float = 1.0
 
 
 class Strategy:
@@ -183,7 +184,7 @@ class Strategy:
         return ids, n_new
 
     def query(self, input_ids: Sequence[int], max_new_tokens: int = 64, *,
-              request_id: Optional[str] = None) -> Queue:
+              request_id: Optional[str] = None, temperature: float = 1.0) -> Queue:
         """Ref-compatible event queue: prefill -> token* -> end|error.
 
         Admission is a strict FIFO with exactly one persistent worker. This
@@ -192,6 +193,8 @@ class Strategy:
         """
         ids, n_new = self.validate_request(input_ids, max_new_tokens)
 
+        from model.sampling import temperatures
+        temperature = temperatures(temperature, 1)[0]
         out: Queue = Queue()
         rid = str(request_id) if request_id is not None else (
             "req_" + uuid.uuid4().hex[:16])
@@ -201,7 +204,7 @@ class Strategy:
         out.request_id = rid
         out.metrics = None
         out.cancel_handle = handle
-        job = _Job(ids=ids, n_new=n_new, out=out, handle=handle)
+        job = _Job(ids=ids, n_new=n_new, out=out, handle=handle, temperature=temperature)
         with self._ready:
             if self._closing:
                 raise RuntimeError("strategy is shutting down")
@@ -236,8 +239,10 @@ class Strategy:
             if current is job.handle:
                 del self._handles[job.handle.request_id]
 
-    def generate(self, input_ids: Sequence[int], max_new_tokens: int = 64) -> dict:
+    def generate(self, input_ids: Sequence[int], max_new_tokens: int = 64, *, temperature: float = 0.0) -> dict:
         """Blocking helper used by followers and non-stream callers."""
+        from model.sampling import temperatures
+        temperature = temperatures(temperature, 1)[0]
         ids = tuple(int(x) for x in input_ids)
         n_new = int(max_new_tokens)
         if not ids:
@@ -256,8 +261,9 @@ class Strategy:
                 activate()
             if self._coordinator is not None:
                 return self._coordinator.run(
-                    ids, n_new, lambda: self._generate_coordinated(ids, n_new))
-            return self._generate_locked(ids, n_new)
+                    ids, n_new, lambda: self._generate_coordinated(
+                        ids, n_new, temperature=temperature), temperature=temperature)
+            return self._generate_locked(ids, n_new, temperature=temperature)
 
     def _start_worker(self) -> None:
         """Launch the single FIFO worker once; caller must hold ``_ready``."""
@@ -389,7 +395,7 @@ class Strategy:
                         if candidate.handle.state != "cancelled":
                             return BoardingRequest(
                                 candidate.ids, candidate.n_new,
-                                candidate.handle.cancel_event)
+                                candidate.handle.cancel_event, candidate.temperature)
                         self._jobs.popleft()
                     self._finish_cancelled(candidate)
                     self._forget_request(candidate)
@@ -414,7 +420,7 @@ class Strategy:
                 state, [anchor.n_new],
                 cancel_events=[anchor.handle.cancel_event],
                 on_tokens=emit, board_request=request_board,
-                on_boarded=boarded, boarding_interval_steps=128)
+                on_boarded=boarded, boarding_interval_steps=128, temperature=anchor.temperature)
 
         try:
             with self._lock:
@@ -424,7 +430,7 @@ class Strategy:
                 if self._coordinator is not None:
                     result = self._coordinator.run(
                         anchor.ids, anchor.n_new, execute_local,
-                        op="generate_dynamic")
+                        op="generate_dynamic", temperature=anchor.temperature)
                 else:
                     result = execute_local()
             rows = result["rows"]
@@ -479,7 +485,7 @@ class Strategy:
                 self._forget_request(job)
                 self._decrement_pending()
 
-    def _run_epoch_follower(self, ids: tuple[int, ...], n_new: int) -> dict:
+    def _run_epoch_follower(self, ids: tuple[int, ...], n_new: int, temperature=1.0) -> dict:
         match = self.cold_cache.begin(ids)
         records = []
         if match.token_count:
@@ -495,9 +501,12 @@ class Strategy:
             lambda start, end:
             state.export_prefix_records(0, start, end))
         return self.model.decode_dflash_batch_dynamic(
-            state, [n_new], boarding_interval_steps=128)
+            state, [n_new], boarding_interval_steps=128, temperature=temperature)
 
-    def _run_generate(self, ids: tuple[int, ...], n_new: int, out: Queue) -> dict:
+    def _run_generate(self, ids: tuple[int, ...], n_new: int, out: Queue, *,
+                      temperature: float = 0.0) -> dict:
+        from model.sampling import temperatures
+        temperature = temperatures(temperature, 1)[0]
         with self._lock:
             activate = getattr(self.model.rt, "activate", None)
             if activate is not None:
@@ -505,16 +514,18 @@ class Strategy:
             if self._coordinator is not None:
                 return self._coordinator.run(
                     ids, n_new,
-                    lambda: self._generate_coordinated(ids, n_new, out=out))
-            return self._generate_locked(ids, n_new, out=out)
+                    lambda: self._generate_coordinated(
+                        ids, n_new, out=out, temperature=temperature),
+                    temperature=temperature)
+            return self._generate_locked(ids, n_new, out=out, temperature=temperature)
 
     def _generate_coordinated(self, ids: tuple[int, ...], n_new: int,
-                              out: Optional[Queue] = None) -> dict:
+                              out: Optional[Queue] = None, *, temperature: float = 0.0) -> dict:
         self.model.rt.barrier()
-        return self._generate_locked(ids, n_new, out=out)
+        return self._generate_locked(ids, n_new, out=out, temperature=temperature)
 
     def _generate_locked(self, ids: tuple[int, ...], n_new: int,
-                         out: Optional[Queue] = None) -> dict:
+                         out: Optional[Queue] = None, *, temperature: float = 0.0) -> dict:
         total_t0 = time.perf_counter()
         lookup_t0 = time.perf_counter()
         match = self.cold_cache.begin(ids)
@@ -574,7 +585,8 @@ class Strategy:
 
         result = self.model.generate_dflash(
             ids, n_new, sequence_id=0, restored_records=records,
-            on_prefill_ready=store_ready, on_tokens=on_tokens)
+            on_prefill_ready=store_ready, on_tokens=on_tokens,
+            **({"temperature": temperature} if temperature else {}))
         emit_prefill()
         hit = int(result["cache_hit_tokens"])
         metrics = QueryMetrics(
@@ -622,15 +634,15 @@ def follower_main() -> None:
         raise RuntimeError("LJQ_CONTROL_DIR is required for follower ranks")
     server = FollowerControlServer(control_dir, strategy.model.rt.rank)
 
-    def execute(ids, n_new, *, op="generate"):
+    def execute(ids, n_new, *, op="generate", temperature=1.0):
         if op == "generate_dynamic":
             with strategy._lock:
                 activate = getattr(strategy.model.rt, "activate", None)
                 if activate is not None:
                     activate()
                 strategy.model.rt.barrier()
-                return strategy._run_epoch_follower(ids, n_new)
+                return strategy._run_epoch_follower(ids, n_new, temperature)
         strategy.model.rt.barrier()
-        return strategy.generate(ids, n_new)
+        return strategy.generate(ids, n_new, temperature=temperature)
 
     server.serve(execute, shutdown=strategy.close)

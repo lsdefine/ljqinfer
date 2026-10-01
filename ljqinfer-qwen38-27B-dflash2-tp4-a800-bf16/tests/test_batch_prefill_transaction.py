@@ -271,7 +271,7 @@ class BatchPrefillTransactionTest(unittest.TestCase):
             list(range(8)) + [21, 22, 23, 24, 25, 26, 27, 28],
         ))
         execution._global_argmax_rows = MethodType(
-            lambda this, logits: next(argmax_results), execution)
+            lambda this, logits, temperature=0.0: next(argmax_results), execution)
 
         draft_calls, append_calls = [], []
 

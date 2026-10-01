@@ -28,6 +28,7 @@ class BoardingRequest:
     input_ids: tuple[int, ...]
     max_new_tokens: int
     cancel_event: threading.Event
+    temperature: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -304,14 +305,24 @@ class ModelExecution:
         self.verify = verify
         return verify
 
-    def _global_argmax_rows(self, local_logits) -> list[int]:
+    def _global_argmax_rows(self, local_logits, temperature=0.0) -> list[int]:
         """Gather shard winners, preserving first global-index ties."""
         rows, width = local_logits.shape
         # FP32 must represent every global token index exactly.
         assert width * self.rt.world < 2**24
-        values, indices = local_logits.float().max(-1)
-        pairs = torch.stack(
-            (values, indices.float() + self.rt.rank * width), dim=-1)
+        temps = ([float(temperature)] if isinstance(temperature, (int, float))
+                 else temperature)
+        if any(temps):
+            from model.sampling import sample_pairs, select_candidates
+            pairs = sample_pairs(local_logits, temps, self.rt.rank, self.rt.world)
+            gathered = self.rt.all_gather(pairs)
+            candidates = gathered.reshape(
+                self.rt.world, rows, pairs.shape[1], 3).cpu().tolist()
+            return select_candidates(candidates, temps)
+        else:
+            values, indices = local_logits.float().max(-1)
+            pairs = torch.stack(
+                (values, indices.float() + self.rt.rank * width), dim=-1)
         gathered = self.rt.all_gather(pairs)
         winners = gathered[:, :, 0].argmax(0)
         ids = gathered[
@@ -326,16 +337,17 @@ class ModelExecution:
             raise ValueError("only rank 0 may originate a boarding request")
         # Raw NCCL bindings support floating dtypes only.  These control values
         # are all well below float32's exact-integer limit (2**24).
-        meta = torch.zeros(4, dtype=torch.float32, device=self.rt.device)
+        meta = torch.zeros(5, dtype=torch.float32, device=self.rt.device)
         if local is not None:
             meta.copy_(torch.tensor(
                 [1, len(local.input_ids), int(local.max_new_tokens),
-                 int(local.cancel_event.is_set())],
+                 int(local.cancel_event.is_set()), local.temperature],
                 dtype=torch.float32, device=self.rt.device))
         gathered = self.rt.all_gather(meta.contiguous())
         self.rt.synchronize()
-        has_request, length, limit, cancelled = (
-            int(x) for x in gathered[0].reshape(-1).cpu().tolist())
+        metadata = gathered[0].reshape(-1).cpu().tolist()
+        has_request, length, limit, cancelled = map(int, metadata[:4])
+        temperature = metadata[4]
         if not has_request:
             return None
         if length <= 0 or limit < 0:
@@ -351,7 +363,7 @@ class ModelExecution:
         event = local.cancel_event if local is not None else threading.Event()
         if cancelled:
             event.set()
-        return BoardingRequest(input_ids, limit, event)
+        return BoardingRequest(input_ids, limit, event, temperature)
 
     def _boarding_slot(self, state: BatchPrefillState, prompt_length: int,
                        max_new_tokens: int) -> Optional[int]:
@@ -835,7 +847,8 @@ class ModelExecution:
 
     @torch.inference_mode()
     def decode_dflash_batch(self, state: BatchPrefillState, max_new_tokens,
-                            on_tokens: Optional[Callable[[int, Sequence[int]], None]] = None):
+                            on_tokens: Optional[Callable[[int, Sequence[int]], None]] = None, *,
+                            temperature=0.0):
         """Decode 1-4 resident rows with one fused BxQ target verify per round."""
         if state.owner is not self:
             raise ValueError("batch prefill state belongs to another execution")
@@ -857,6 +870,8 @@ class ModelExecution:
                     f"row sid={row.sequence_id} capacity {row.capacity} does not "
                     f"cover prompt+decode {row.input_length + limit}")
 
+        from model.sampling import temperatures
+        temps = temperatures(temperature, batch)
         graph = None
         started = time.perf_counter()
         try:
@@ -865,7 +880,7 @@ class ModelExecution:
                 max(row.capacity for row in state.rows), batch_size=batch)
             self._prime_verify_batch(state, graph)
             first = self._global_argmax_rows(
-                self.engine.local_logits(handoff["last_hidden"]))
+                self.engine.local_logits(handoff["last_hidden"]), temps)
             outputs = [[token] if limits[row] else []
                        for row, token in enumerate(first)]
             for row_index, token in enumerate(first):
@@ -911,7 +926,7 @@ class ModelExecution:
                 t = time.perf_counter()
                 graph.replay()
                 flat_target = self._global_argmax_rows(
-                    graph.local_logits.reshape(-1, graph.local_logits.shape[-1]))
+                    graph.local_logits.reshape(-1, graph.local_logits.shape[-1]), temps)
                 verify_s += time.perf_counter() - t
                 targets = [flat_target[row * VERIFY_WIDTH:(row + 1) * VERIFY_WIDTH]
                            for row in range(batch)]
@@ -1011,7 +1026,7 @@ class ModelExecution:
             board_request: Optional[
                 Callable[[int], Optional[BoardingRequest]]] = None,
             on_boarded: Optional[Callable[[int, int], None]] = None,
-            boarding_interval_steps: int = 128):
+            boarding_interval_steps: int = 128, temperature=0.0):
         """Decode with ref-compatible safe-point alighting and boarding.
 
         Active verify/draft views stay in ``B∈[1,4]``.  Finished rows leave the
@@ -1049,6 +1064,8 @@ class ModelExecution:
 
         graph = None
         epoch = state
+        from model.sampling import temperatures
+        temps = temperatures(temperature, batch)
         epoch_verify_cache: dict[
             tuple[int, int], DecodeGraphRunner] = {}
         touched_verify: list[DecodeGraphRunner] = []
@@ -1068,7 +1085,7 @@ class ModelExecution:
                 epoch_cache=epoch_verify_cache))
             self._prime_verify_batch(epoch, graph)
             first = self._global_argmax_rows(
-                self.engine.local_logits(handoff["last_hidden"]))
+                self.engine.local_logits(handoff["last_hidden"]), temps)
             outputs: list[list[int]] = [
                 [token] if limits[row] else [] for row, token in enumerate(first)]
             current = list(first)
@@ -1187,7 +1204,8 @@ class ModelExecution:
                     epoch_cache=epoch_verify_cache))
                 epoch = epoch.merge(boarded)
                 first_token = self._global_argmax_rows(
-                    self.engine.local_logits(epoch.rows[-1].last_hidden))[0]
+                    self.engine.local_logits(epoch.rows[-1].last_hidden), request.temperature)[0]
+                temps.append(request.temperature)
                 limits.append(int(request.max_new_tokens))
                 cancels.append(request.cancel_event)
                 outputs.append([first_token] if limits[original_i] else [])
@@ -1261,7 +1279,8 @@ class ModelExecution:
                 t = time.perf_counter()
                 graph.replay()
                 flat_target = self._global_argmax_rows(
-                    graph.local_logits.reshape(-1, graph.local_logits.shape[-1]))
+                    graph.local_logits.reshape(-1, graph.local_logits.shape[-1]),
+                    [temps[i] for i in active_rows])
                 verify_s += time.perf_counter() - t
                 width = VERIFY_WIDTH
                 targets = [flat_target[index * width:(index + 1) * width]
@@ -1438,7 +1457,7 @@ class ModelExecution:
 
     @torch.inference_mode()
     def generate_dflash_batch(self, input_ids: Sequence[Sequence[int]],
-                              max_new_tokens, *,
+                              max_new_tokens, *, temperature=0.0,
                               sequence_ids: Optional[Sequence[int]] = None,
                               restored_records: Optional[
                                   Sequence[Sequence[dict]]] = None,
@@ -1467,16 +1486,18 @@ class ModelExecution:
             restored_records=restored_records)
         prefill_s = time.perf_counter() - prefill_started
         result = self.decode_dflash_batch(
-            state, limits, on_tokens=on_tokens)
+            state, limits, on_tokens=on_tokens, temperature=temperature)
         result["prefill_seconds"] = prefill_s
         return result
 
     @torch.inference_mode()
     def generate_dflash(self, input_ids: Sequence[int], max_new_tokens: int,
-                        sequence_id: int = 0, *,
+                        sequence_id: int = 0, *, temperature: float = 0.0,
                         restored_records: Sequence[dict] = (),
                         on_prefill_ready: Optional[Callable[[Callable[[int, int], object]], None]] = None,
                         on_tokens: Optional[Callable[[Sequence[int]], None]] = None) -> dict:
+        from model.sampling import temperatures
+        temperature = temperatures(temperature, 1)[0]
         ids = tuple(int(x) for x in input_ids)
         n_new = int(max_new_tokens)
         if not ids:
@@ -1541,7 +1562,7 @@ class ModelExecution:
                     "verify_capacity": self.verify.max_prefix,
                 }
             first = self._global_argmax_rows(
-                self.engine.local_logits(last_hidden))[0]
+                self.engine.local_logits(last_hidden), temperature)[0]
             self._prime_verify(len(ids), sequence_id)
             self.rt.synchronize()
 
@@ -1584,7 +1605,7 @@ class ModelExecution:
                 self.verify.prepare([query], [positions_host])
                 t = time.perf_counter()
                 self.verify.replay()
-                target = self._global_argmax_rows(self.verify.local_logits[0])
+                target = self._global_argmax_rows(self.verify.local_logits[0], temperature)
                 if profile_phase:
                     phase_row["verify_end"] = phase_event()
                 verify_s += time.perf_counter() - t

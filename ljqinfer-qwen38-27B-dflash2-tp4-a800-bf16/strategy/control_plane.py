@@ -87,16 +87,16 @@ class Rank0Coordinator:
                 self.close()
 
     def run(self, input_ids, max_new_tokens: int, local: Callable[[], dict],
-            *, op: str = "generate") -> dict:
+            *, op: str = "generate", temperature: float = 1.0) -> dict:
         with self._io_lock:
-            return self._run_locked(input_ids, max_new_tokens, local, op=op)
+            return self._run_locked(input_ids, max_new_tokens, local, op=op, temperature=temperature)
 
     def _run_locked(self, input_ids, max_new_tokens: int,
-                    local: Callable[[], dict], *, op: str = "generate") -> dict:
+                    local: Callable[[], dict], *, op: str = "generate", temperature: float = 1.0) -> dict:
         if op not in ("generate", "generate_dynamic"):
             raise ValueError(f"unsupported control-plane op: {op}")
         command = {"op": op, "input_ids": [int(x) for x in input_ids],
-                   "max_new_tokens": int(max_new_tokens)}
+                   "max_new_tokens": int(max_new_tokens), "temperature": temperature}
         try:
             peers = [(rank, self._peer(rank)) for rank in range(1, self.world)]
             for _, (_, fp) in peers:
@@ -170,7 +170,7 @@ class FollowerControlServer:
                         raise RuntimeError(f"expected GO, got {go}")
                     try:
                         if supports_op:
-                            execute(ids, n_new, op=op)
+                            execute(ids, n_new, op=op, **({"temperature": command["temperature"]} if "temperature" in command and "temperature" in inspect.signature(execute).parameters else {}))
                         elif op == "generate":
                             execute(ids, n_new)
                         else:

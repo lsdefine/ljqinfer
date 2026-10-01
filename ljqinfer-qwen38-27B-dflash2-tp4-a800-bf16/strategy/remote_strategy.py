@@ -46,9 +46,9 @@ class RemoteStrategy:
     def __init__(self, base: str = "http://127.0.0.1:62001"):
         self.base = base.rstrip("/")
 
-    def generate(self, input_ids, max_new_tokens: int = 64) -> dict:
+    def generate(self, input_ids, max_new_tokens: int = 64, *, temperature: float = 1.0) -> dict:
         """Blocking compatibility path for existing non-stream callers."""
-        queue = self.query(input_ids, max_new_tokens)
+        queue = self.query(input_ids, max_new_tokens, temperature=temperature)
         token_ids = []
         metrics = {}
         while True:
@@ -68,14 +68,14 @@ class RemoteStrategy:
                 raise RuntimeError(event.get("error") or "generation failed")
             raise RuntimeError(f"unknown strategy event: {kind!r}")
 
-    def query(self, input_ids, max_new_tokens: int = 64) -> Queue:
+    def query(self, input_ids, max_new_tokens: int = 64, *, temperature=1.0) -> Queue:
         out, rid = Queue(), "rpc_" + uuid.uuid4().hex[:16]
         response = requests.post(
             f"{self.base}/generate",
             stream=True,
             json={"request_id": rid,
                   "input_ids": list(input_ids),
-                  "max_new_tokens": int(max_new_tokens)},
+                  "max_new_tokens": int(max_new_tokens), "temperature": temperature},
             timeout=None)
         response.raise_for_status()
         out.request_id = rid

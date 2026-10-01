@@ -470,13 +470,13 @@ class ServiceLayer:
         return stats
 
     def complete(self, messages, max_tokens: int = 1024, *, tools=None,
-                 tool_choice=None, reasoning_effort=None, thinking=None) -> dict:
+                 tool_choice=None, reasoning_effort=None, thinking=None, temperature=1.0) -> dict:
         prompt = self.render_chat(
             messages, tools, tool_choice,
             reasoning_effort=reasoning_effort, thinking=thinking)
         input_ids = self.tokenizer.encode(prompt).ids
         submitted_at = time.perf_counter()
-        queue = self.strategy.query(input_ids, max_tokens)
+        queue = self.strategy.query(input_ids, max_tokens, temperature=temperature)
         print(f"[service] blocking id={queue.request_id} input={len(input_ids)} "
               f"max_new={max_tokens}", flush=True)
         counter = [0]
@@ -508,14 +508,14 @@ class ServiceLayer:
 
     def stream(self, messages, max_tokens: int = 1024, *, tools=None,
                tool_choice=None, model: str = "qwen3.8-27b",
-               reasoning_effort=None, thinking=None) -> Iterator[dict]:
+               reasoning_effort=None, thinking=None, temperature=1.0) -> Iterator[dict]:
         """Yield OpenAI-friendly internal events for the HTTP SSE adapter."""
         prompt = self.render_chat(
             messages, tools, tool_choice,
             reasoning_effort=reasoning_effort, thinking=thinking)
         input_ids = self.tokenizer.encode(prompt).ids
         submitted_at = time.perf_counter()
-        queue = self.strategy.query(input_ids, max_tokens)
+        queue = self.strategy.query(input_ids, max_tokens, temperature=temperature)
         print(f"[service] stream id={queue.request_id} input={len(input_ids)} "
               f"max_new={max_tokens}", flush=True)
         message_id = "msg_" + uuid.uuid4().hex[:24]

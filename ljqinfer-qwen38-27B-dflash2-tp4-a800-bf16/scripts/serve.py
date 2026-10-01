@@ -12,7 +12,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_HEALTH = "http://127.0.0.1:62001/health"
-STARTUP_TIMEOUT = 240.0
+# Disk-cold weights plus graph compilation may exceed four minutes.
+STARTUP_TIMEOUT = 1200.0
 
 
 def wait_engine(proc: subprocess.Popen) -> None:

@@ -598,6 +598,26 @@ class ModelExecution:
             self.verify.v_in[slot, 0, :prompt_len].copy_(v)
         self.rt.synchronize()
 
+    def cold_record_template(self):
+        """CPU pool ABI only: meta tensors allocate no model/device storage."""
+        cache = self.engine.cache
+        draft = self.drafter.kv_pool
+        block = int(cache.spec.checkpoint_interval)
+        def meta(tensor):
+            return torch.empty(tuple(tensor.shape), dtype=tensor.dtype, device="meta")
+        def layers(stage):
+            return tuple(meta(stage[0, i]) for i in range(stage.shape[1]))
+        return {
+            "schema": 1, "start": 0, "end": block,
+            "target": (0, block, layers(cache.cold_export_k_stage),
+                       layers(cache.cold_export_v_stage),
+                       meta(cache.gdn_checkpoint_conv_host[0, 0]),
+                       meta(cache.gdn_checkpoint_recurrent_host[0, 0])),
+            "dflash": (layers(draft.cold_export_k_stage),
+                       layers(draft.cold_export_v_stage)),
+            "boundary_hidden": meta(self._boundary_hidden_rows(0)[0]),
+        }
+
     def _export_prefix_records(self, start: int, end: int,
                                sequence_id: int = 0):
         """Export completed cold blocks through fixed-capacity staging pools."""

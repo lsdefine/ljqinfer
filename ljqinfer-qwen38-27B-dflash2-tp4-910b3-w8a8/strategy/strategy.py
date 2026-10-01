@@ -123,7 +123,11 @@ class Strategy:
     def __init__(self, model: Optional[ModelExecution] = None):
         self.model = model or ModelExecution.startup()
         block = int(self.model.engine.engine_config.cold_checkpoint_interval)
-        self.cold_cache = PrefixColdCache(block_size=block)
+        template = getattr(self.model, "cold_record_template", None)
+        self.cold_cache = PrefixColdCache(
+            block_size=block,
+            record_template=template() if template is not None else None,
+            pin_memory=template is not None)
         # Serialize model execution itself. Admission uses a separate FIFO.
         self._lock = Lock()
         self._ready = Condition(Lock())

@@ -33,8 +33,19 @@ app = FastAPI(title="ljqinfer-qwen-tp4-engine", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "strategy": _state["strategy"] is not None,
-            "backend": "dflash2_q8", "verify_width": 8}
+    strategy = _state["strategy"]
+    result = {"status": "ok", "strategy": strategy is not None,
+              "backend": "dflash2_q8", "verify_width": 8}
+    if strategy is not None:
+        cache = strategy.cold_cache
+        result["cold_cache"] = {
+            "capacity_blocks": cache.capacity_blocks,
+            "capacity_bytes": cache.capacity_bytes,
+            "page_bytes": cache.page_bytes,
+            "entries": cache.entry_count,
+            "evicted_blocks": cache.evicted_blocks,
+        }
+    return result
 
 
 def _event_stream(queue, request_id: str) -> Iterator[bytes]:

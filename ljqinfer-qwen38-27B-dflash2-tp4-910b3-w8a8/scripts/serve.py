@@ -12,7 +12,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_HEALTH = "http://127.0.0.1:62001/health"
-STARTUP_TIMEOUT = 240.0
+# Allow disk-cold model startup and the fixed host pool allocation.
+STARTUP_TIMEOUT = 1200.0
 
 
 def wait_engine(proc: subprocess.Popen) -> None:

@@ -1,0 +1,164 @@
+{
+  "note": "Historical source measurements, not a fresh benchmark of imported HEAD. Only benchmark metrics retained.",
+  "glm53_prefill": {
+    "baseline_commit": "92045ca",
+    "scope": "Engine.prefill 12288 tokens, history=0; 78 real layers, eager, two warmups and five samples per version; no HTTP",
+    "baseline": {
+      "stage": "timing",
+      "median_wall": 2.398256086744368,
+      "median_gpu": 2.39822021484375,
+      "samples": [
+        [
+          2.395422945264727,
+          2.3953837890625
+        ],
+        [
+          2.397123035043478,
+          2.39708154296875
+        ],
+        [
+          2.398256086744368,
+          2.39822021484375
+        ],
+        [
+          2.398510324768722,
+          2.398487548828125
+        ],
+        [
+          2.3993667121976614,
+          2.399332275390625
+        ]
+      ],
+      "prefill_tps": 5123.72305356304
+    },
+    "candidate": {
+      "stage": "timing",
+      "median_wall": 2.2009361973032355,
+      "median_gpu": 2.200911865234375,
+      "samples": [
+        [
+          2.1991648166440427,
+          2.199132080078125
+        ],
+        [
+          2.1998459971509874,
+          2.199814208984375
+        ],
+        [
+          2.2009361973032355,
+          2.200911865234375
+        ],
+        [
+          2.2019557459279895,
+          2.201915283203125
+        ],
+        [
+          2.2026888709515333,
+          2.202660888671875
+        ]
+      ],
+      "prefill_tps": 5583.078698535764
+    },
+    "saved_ms": 197.31988944113255,
+    "latency_reduction_percent": 8.227640514778978,
+    "throughput_increase_percent": 8.965270764454903,
+    "all_8_ranks_bitwise": true,
+    "token_projection_scope": "12288-row first chunk only; other shapes/chunks original projection path",
+    "http_started": false
+  },
+  "glm53_32k_decode": {
+    "source_commit": "6985fcd545fe9478835121f9ee158219a175d67e",
+    "source_directory": "/mnt/data2/kw/glm53_int4_tp8/service_audit/prefill_capacity",
+    "logs": [
+      "step_timing_service.log",
+      "split_mla_service.log"
+    ],
+    "workload": "32770 input tokens, counting output, 256 tokens, B1, reasoning off",
+    "records": [
+      {
+        "accepted_tokens": 224,
+        "cache_hit_tokens": 36,
+        "cache_load_seconds": 0.005892,
+        "cache_store_drain_seconds": 2e-06,
+        "cache_store_enqueue_seconds": 0.001614,
+        "cache_store_seconds": 0.001614,
+        "control_ms_per_step": 2.2322465520119295,
+        "decode_seconds": 2.735457,
+        "decode_steps": 32,
+        "decode_tokens_per_step": 8.0,
+        "decode_tps": 93.586,
+        "input_tokens": 32770,
+        "model_prefill_seconds": 7.773812,
+        "model_step_host_ms": 83.25338001304772,
+        "mtp_accept_rate": 1.0,
+        "mtp_accepted_per_step": 7.0,
+        "output_tokens": 256,
+        "prefill_stall_seconds": 0.0,
+        "prefill_tokens": 32734,
+        "proposed_tokens": 224,
+        "queue_wait_seconds": 7.837723,
+        "reasoning_effort": "off",
+        "strategy_seconds": 7.788695,
+        "time_to_first_token_seconds": 7.837723,
+        "total_seconds": 10.57318,
+        "wall_ms_per_step": 85.53929095796775
+      },
+      {
+        "accepted_tokens": 224,
+        "cache_hit_tokens": 0,
+        "cache_load_seconds": 0.003582,
+        "cache_store_drain_seconds": 2e-06,
+        "cache_store_enqueue_seconds": 0.002574,
+        "cache_store_seconds": 0.002574,
+        "control_ms_per_step": 0.7598205411341041,
+        "decode_seconds": 1.490157,
+        "decode_steps": 32,
+        "decode_tokens_per_step": 8.0,
+        "decode_tps": 171.794,
+        "input_tokens": 32770,
+        "model_prefill_seconds": 8.093954,
+        "model_step_host_ms": 45.80544361670036,
+        "mtp_accept_rate": 1.0,
+        "mtp_accepted_per_step": 7.0,
+        "output_tokens": 256,
+        "prefill_stall_seconds": 0.0,
+        "prefill_tokens": 32770,
+        "proposed_tokens": 224,
+        "queue_wait_seconds": 8.222167,
+        "reasoning_effort": "off",
+        "strategy_seconds": 8.162797,
+        "time_to_first_token_seconds": 8.222167,
+        "total_seconds": 9.712325,
+        "wall_ms_per_step": 46.617417378001846
+      },
+      {
+        "accepted_tokens": 224,
+        "cache_hit_tokens": 32769,
+        "cache_load_seconds": 0.29093,
+        "cache_store_drain_seconds": 2e-06,
+        "cache_store_enqueue_seconds": 0.000682,
+        "cache_store_seconds": 0.000682,
+        "control_ms_per_step": 0.7233035430544987,
+        "decode_seconds": 1.479711,
+        "decode_steps": 32,
+        "decode_tokens_per_step": 8.0,
+        "decode_tps": 173.007,
+        "input_tokens": 32770,
+        "model_prefill_seconds": 0.165155,
+        "model_step_host_ms": 45.50187922723126,
+        "mtp_accept_rate": 1.0,
+        "mtp_accepted_per_step": 7.0,
+        "output_tokens": 256,
+        "prefill_stall_seconds": 0.0,
+        "prefill_tokens": 1,
+        "proposed_tokens": 224,
+        "queue_wait_seconds": 0.518113,
+        "reasoning_effort": "off",
+        "strategy_seconds": 0.464018,
+        "time_to_first_token_seconds": 0.518113,
+        "total_seconds": 1.997824,
+        "wall_ms_per_step": 46.2729452556232
+      }
+    ]
+  }
+}

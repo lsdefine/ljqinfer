@@ -1,0 +1,162 @@
+// Fused FP8 E4M3 dense projection for decode row counts (SM80).
+// Consumes packed FP8 weights with 32x32 E8M0 scales directly: no dequantized
+// weight copy, no per-tile unpack, one launch per projection.
+//
+// Numerics: the quantized activation and the dequantized weight are both
+// exactly (fp8 value) * 2^k, so BF16 staging of the activation is lossless
+// (fp8 e4m3 keeps 3 mantissa bits, bf16 keeps 7). Products accumulate in FP32,
+// i.e. strictly more precise than the reference TF32 GEMM path.
+//
+// Shape: the activation tile is staged in shared memory in K blocks so that the
+// weight stream stays the only large global read, while keeping the shared
+// footprint small enough for several concurrent blocks per SM.
+#include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAException.h>
+#include <cuda_bf16.h>
+#include <cuda_fp8.h>
+
+#define MAXM 8
+#define WARPS 8
+#define ROWS_PER_WARP 8
+#define ROWS_PER_BLOCK (WARPS * ROWS_PER_WARP)
+#define KBLOCK 2048
+
+extern __shared__ __nv_bfloat16 sA[];
+
+template <bool SPLIT>
+__global__ __launch_bounds__(WARPS * 32) void fp8_dense_gemv(
+    const unsigned char* __restrict__ W, const unsigned char* __restrict__ S,
+    const __nv_bfloat16* __restrict__ A, __nv_bfloat16* __restrict__ out, float* __restrict__ outf,
+    int M, int N, int K, int kchunk) {
+  const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+  const int n0 = blockIdx.x * ROWS_PER_BLOCK + warp * ROWS_PER_WARP;
+  const int kbeg = SPLIT ? (int)blockIdx.y * kchunk : 0;
+  const int kend = SPLIT ? min(K, kbeg + kchunk) : K;
+  float acc[ROWS_PER_WARP][MAXM];
+#pragma unroll
+  for (int j = 0; j < ROWS_PER_WARP; ++j)
+#pragma unroll
+    for (int m = 0; m < MAXM; ++m) acc[j][m] = 0.f;
+
+  for (int kb = kbeg; kb < kend; kb += KBLOCK) {
+    const int kn = min(KBLOCK, kend - kb);
+    __syncthreads();
+    for (int i = tid; i < M * kn; i += WARPS * 32) {
+      const int m = i / kn, k = i - m * kn;
+      sA[m * KBLOCK + k] = A[(size_t)m * K + kb + k];
+    }
+    __syncthreads();
+
+#pragma unroll 1
+    for (int j = 0; j < ROWS_PER_WARP; j += 2) {
+      const int na = n0 + j, nb = n0 + j + 1;
+      if (na >= N) break;
+      const unsigned char* __restrict__ wa = W + (size_t)na * K + kb;
+      const unsigned char* __restrict__ wbp = W + (size_t)min(nb, N - 1) * K + kb;
+      const unsigned char* __restrict__ sa = S + (size_t)(na >> 5) * (K / 32) + kb / 32;
+      const unsigned char* __restrict__ sb = S + (size_t)(min(nb, N - 1) >> 5) * (K / 32) + kb / 32;
+      for (int k0 = lane * 16; k0 < kn; k0 += 32 * 16) {
+        const uint4 va = *reinterpret_cast<const uint4*>(wa + k0);
+        const uint4 vb = *reinterpret_cast<const uint4*>(wbp + k0);
+        const float ca = exp2f(float(sa[k0 >> 5]) - 127.f);
+        const float cb = exp2f(float(sb[k0 >> 5]) - 127.f);
+        const unsigned char* pa = reinterpret_cast<const unsigned char*>(&va);
+        const unsigned char* pb = reinterpret_cast<const unsigned char*>(&vb);
+        float fa[16], fb[16];
+#pragma unroll
+        for (int i = 0; i < 16; ++i) {
+          __nv_fp8_e4m3 ta, tb;
+          ta.__x = pa[i];
+          tb.__x = pb[i];
+          fa[i] = float(ta) * ca;
+          fb[i] = float(tb) * cb;
+        }
+        for (int m = 0; m < M; ++m) {
+          const __nv_bfloat16* arow = sA + m * KBLOCK + k0;
+          float s0 = 0.f, s1 = 0.f;
+#pragma unroll
+          for (int i = 0; i < 16; ++i) {
+            const float av = __bfloat162float(arow[i]);
+            s0 = fmaf(fa[i], av, s0);
+            s1 = fmaf(fb[i], av, s1);
+          }
+          acc[j][m] += s0;
+          acc[j + 1][m] += s1;
+        }
+      }
+    }
+  }
+
+  for (int j = 0; j < ROWS_PER_WARP; ++j) {
+    const int n = n0 + j;
+    if (n >= N) break;
+    for (int m = 0; m < M; ++m) {
+      float v = acc[j][m];
+#pragma unroll
+      for (int d = 16; d; d >>= 1) v += __shfl_xor_sync(0xffffffff, v, d);
+      if (lane == 0) {
+        if (SPLIT) atomicAdd(outf + (size_t)m * N + n, v);
+        else out[(size_t)m * N + n] = __float2bfloat16(v);
+      }
+    }
+  }
+}
+
+__global__ void fp8_dense_cast(const float* __restrict__ src, __nv_bfloat16* __restrict__ dst,
+                               int n) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) dst[i] = __float2bfloat16(src[i]);
+}
+
+torch::Tensor dense_projection(torch::Tensor a, torch::Tensor w, torch::Tensor s,
+                               torch::Tensor out, torch::Tensor outf) {
+  TORCH_CHECK(a.is_cuda() && a.scalar_type() == torch::kBFloat16 && a.dim() == 2 && a.is_contiguous(),
+              "contiguous CUDA FP32 quantized activation required");
+  TORCH_CHECK(w.device() == a.device() && s.device() == a.device(), "rank-local tensors required");
+  TORCH_CHECK(w.scalar_type() == torch::kFloat8_e4m3fn && w.dim() == 2 && w.is_contiguous(),
+              "contiguous FP8 E4M3 weight required");
+  TORCH_CHECK(s.scalar_type() == torch::kUInt8 && s.dim() == 2 && s.is_contiguous(), "E8M0 scale required");
+  const int64_t M = a.size(0), K = a.size(1), N = w.size(0);
+  TORCH_CHECK(M > 0 && M <= MAXM, "decode row count bound");
+  TORCH_CHECK(K > 0 && K % 32 == 0 && w.size(1) == K, "K32 geometry");
+  TORCH_CHECK(s.size(0) == (N + 31) / 32 && s.size(1) == K / 32, "scale ABI");
+  TORCH_CHECK(out.device() == a.device() && out.scalar_type() == torch::kBFloat16 &&
+                  out.is_contiguous() && out.dim() == 2 && out.size(0) == M && out.size(1) == N,
+              "BF16 output geometry");
+  TORCH_CHECK(outf.device() == a.device() && outf.scalar_type() == torch::kFloat32 &&
+                  outf.is_contiguous() && outf.numel() >= M * N,
+              "FP32 split-K accumulator required");
+  c10::cuda::CUDAGuard guard(a.device());
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+  const size_t shmem = (size_t)M * KBLOCK * sizeof(__nv_bfloat16);
+  const int blocks = int((N + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK);
+  // Enough blocks to fill the device: split K only when the N tiling is too
+  // narrow, so the common wide projection keeps the direct single-pass store.
+  const int kblocks = int((K + KBLOCK - 1) / KBLOCK);
+  int split = (256 + blocks - 1) / blocks;
+  split = max(1, min(split, kblocks));
+  if (split == 1) {
+    fp8_dense_gemv<false><<<dim3(blocks), WARPS * 32, shmem, stream>>>(
+        (const unsigned char*)w.data_ptr(), s.data_ptr<unsigned char>(), (const __nv_bfloat16*)a.data_ptr(),
+        (__nv_bfloat16*)out.data_ptr(), nullptr, (int)M, (int)N, (int)K, (int)K);
+  } else {
+    const int kchunk = ((kblocks + split - 1) / split) * KBLOCK;
+    split = int((K + kchunk - 1) / kchunk);
+    outf.zero_();
+    fp8_dense_gemv<true><<<dim3(blocks, split), WARPS * 32, shmem, stream>>>(
+        (const unsigned char*)w.data_ptr(), s.data_ptr<unsigned char>(), (const __nv_bfloat16*)a.data_ptr(),
+        nullptr, outf.data_ptr<float>(), (int)M, (int)N, (int)K, kchunk);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    const int total = int(M * N);
+    fp8_dense_cast<<<(total + 255) / 256, 256, 0, stream>>>(
+        outf.data_ptr<float>(), (__nv_bfloat16*)out.data_ptr(), total);
+  }
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out;
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("dense_projection", &dense_projection, "fused FP8 dense projection (SM80)");
+}

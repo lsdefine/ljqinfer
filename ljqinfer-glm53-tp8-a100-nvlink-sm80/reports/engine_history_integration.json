@@ -1,0 +1,916 @@
+{
+  "baseline_commit": "92045ca",
+  "scope": "Engine.prefill 12288 tokens, history=0; 78 real layers, eager, two warmups and five samples per version; no HTTP",
+  "ranks": {
+    "0": {
+      "checks": [
+        {
+          "stage": "correctness",
+          "tag": "12k",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "tail33",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "verify8",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "first17",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "baseline_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78025827840,
+        "reserved": 80461430784,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      },
+      "candidate_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78204872192,
+        "reserved": 80641785856,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      }
+    },
+    "1": {
+      "checks": [
+        {
+          "stage": "correctness",
+          "tag": "12k",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "tail33",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "verify8",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "first17",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "baseline_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 77999826432,
+        "reserved": 80436264960,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      },
+      "candidate_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78178870784,
+        "reserved": 80616620032,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      }
+    },
+    "2": {
+      "checks": [
+        {
+          "stage": "correctness",
+          "tag": "12k",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "tail33",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "verify8",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "first17",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "baseline_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78025827840,
+        "reserved": 80461430784,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      },
+      "candidate_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78204872192,
+        "reserved": 80641785856,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      }
+    },
+    "3": {
+      "checks": [
+        {
+          "stage": "correctness",
+          "tag": "12k",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "tail33",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "verify8",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "first17",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "baseline_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 77999826432,
+        "reserved": 80436264960,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      },
+      "candidate_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78178870784,
+        "reserved": 80616620032,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      }
+    },
+    "4": {
+      "checks": [
+        {
+          "stage": "correctness",
+          "tag": "12k",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "tail33",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "verify8",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "first17",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "baseline_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78025827840,
+        "reserved": 80461430784,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      },
+      "candidate_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78204872192,
+        "reserved": 80641785856,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      }
+    },
+    "5": {
+      "checks": [
+        {
+          "stage": "correctness",
+          "tag": "12k",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "tail33",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "verify8",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "first17",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "baseline_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 77999826432,
+        "reserved": 80436264960,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      },
+      "candidate_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78178870784,
+        "reserved": 80616620032,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      }
+    },
+    "6": {
+      "checks": [
+        {
+          "stage": "correctness",
+          "tag": "12k",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "tail33",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "verify8",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "first17",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "baseline_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78025827840,
+        "reserved": 80461430784,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      },
+      "candidate_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78204872192,
+        "reserved": 80641785856,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      }
+    },
+    "7": {
+      "checks": [
+        {
+          "stage": "correctness",
+          "tag": "12k",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "tail33",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "verify8",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "stage": "correctness",
+          "tag": "first17",
+          "equal": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "maxdiff": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "baseline_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 77999826432,
+        "reserved": 80436264960,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      },
+      "candidate_memory": {
+        "stage": "DONE",
+        "ALL_PASS": true,
+        "allocated": 78178870784,
+        "reserved": 80616620032,
+        "scope": "Engine.prefill 12288 history0; subsequent33,verify8,first17 correctness; no HTTP"
+      }
+    }
+  },
+  "baseline": {
+    "stage": "timing",
+    "median_wall": 2.398256086744368,
+    "median_gpu": 2.39822021484375,
+    "samples": [
+      [
+        2.395422945264727,
+        2.3953837890625
+      ],
+      [
+        2.397123035043478,
+        2.39708154296875
+      ],
+      [
+        2.398256086744368,
+        2.39822021484375
+      ],
+      [
+        2.398510324768722,
+        2.398487548828125
+      ],
+      [
+        2.3993667121976614,
+        2.399332275390625
+      ]
+    ],
+    "prefill_tps": 5123.72305356304
+  },
+  "candidate": {
+    "stage": "timing",
+    "median_wall": 2.2009361973032355,
+    "median_gpu": 2.200911865234375,
+    "samples": [
+      [
+        2.1991648166440427,
+        2.199132080078125
+      ],
+      [
+        2.1998459971509874,
+        2.199814208984375
+      ],
+      [
+        2.2009361973032355,
+        2.200911865234375
+      ],
+      [
+        2.2019557459279895,
+        2.201915283203125
+      ],
+      [
+        2.2026888709515333,
+        2.202660888671875
+      ]
+    ],
+    "prefill_tps": 5583.078698535764
+  },
+  "saved_ms": 197.31988944113255,
+  "latency_reduction_percent": 8.227640514778978,
+  "throughput_increase_percent": 8.965270764454903,
+  "all_8_ranks_bitwise": true,
+  "token_projection_scope": "12288-row first chunk only; other shapes/chunks original projection path",
+  "http_started": false
+}

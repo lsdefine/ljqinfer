@@ -1,0 +1,110 @@
+   L      min      med      max     busy     nk  top3 kernels(us, from median step)
+   0    362.1    369.7    391.3    392.6     38  oneshot_ar(uint4 const*, uint4*, P=81 | void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=47
+   1    524.5    749.5   1487.2    908.1    105  ncclDevKernel_AllGather_RING_LL(nc=400 | void cutlass::Kernel2<cutlass_80_t=55 | void moe_decode_down_fp4_kernel<6>=50
+   2    294.1    300.3    306.4    327.6     36  void moe_decode_down_fp4_kernel<6>=48 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | oneshot_ar(uint4 const*, uint4*, P=40
+   3    290.1    294.3    311.1    318.3     36  void moe_decode_down_fp4_kernel<6>=51 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | oneshot_ar(uint4 const*, uint4*, P=35
+   4    287.7    292.1    311.4    313.7     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | oneshot_ar(uint4 const*, uint4*, P=36
+   5    287.0    289.8    306.0    310.8     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=45 | void cutlass::Kernel2<cutlass_80_t=33
+   6    288.6    289.9    356.7    313.0     36  void moe_decode_down_fp4_kernel<6>=48 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | void cutlass::Kernel2<cutlass_80_t=34
+   7    513.0    517.4    531.3    537.6    102  void cutlass::Kernel2<cutlass_80_t=54 | void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=44
+   8    293.1    295.2    322.1    316.4     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | void cutlass::Kernel2<cutlass_80_t=34
+   9    287.9    291.2    299.4    314.8     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | void cutlass::Kernel2<cutlass_80_t=35
+  10    287.2    291.9    299.9    315.9     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | oneshot_ar(uint4 const*, uint4*, P=35
+  11    288.9    291.5    324.6    312.9     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | void cutlass::Kernel2<cutlass_80_t=35
+  12    287.9    293.4    307.6    314.9     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | oneshot_ar(uint4 const*, uint4*, P=37
+  13    599.5    602.9    625.4    620.9    105  oneshot_ar(uint4 const*, uint4*, P=76 | void cutlass::Kernel2<cutlass_80_t=53 | void moe_decode_down_fp4_kernel<6>=49
+  14    294.3    296.3    323.7    317.1     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=45 | void cutlass::Kernel2<cutlass_80_t=34
+  15    288.9    291.1    306.0    313.3     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=45 | void cutlass::Kernel2<cutlass_80_t=34
+  16    289.6    290.0    300.4    311.5     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | void cutlass::Kernel2<cutlass_80_t=34
+  17    287.2    290.9    297.5    314.6     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | void cutlass::Kernel2<cutlass_80_t=34
+  18    288.4    289.8    308.2    311.8     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | void cutlass::Kernel2<cutlass_80_t=35
+  19    870.0    874.6    890.5    852.9    167  void at_cuda_detail::cub::DeviceRa=94 | void at::native::vectorized_elemen=84 | void at::native::elementwise_kerne=57
+  20    299.4    303.1    322.1    330.6     36  void moe_decode_down_fp4_kernel<6>=47 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | void cutlass::Kernel2<cutlass_80_t=36
+  21    292.9    295.5    302.2    319.6     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | void cutlass::Kernel2<cutlass_80_t=35
+  22    291.7    294.1    319.7    315.0     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=42 | oneshot_ar(uint4 const*, uint4*, P=35
+  23    397.9    401.1    404.0    421.9     56  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | void cutlass::Kernel2<cutlass_80_t=40
+  24    294.6    297.6    308.3    318.7     36  void moe_decode_down_fp4_kernel<6>=48 | moe_decode_gu_fp4_kernel(__nv_bflo=45 | void cutlass::Kernel2<cutlass_80_t=34
+  25    292.4    295.4    308.9    318.4     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=41 | oneshot_ar(uint4 const*, uint4*, P=35
+  26    291.0    292.1    293.5    313.1     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=42 | void cutlass::Kernel2<cutlass_80_t=34
+  27    396.9    398.7    426.8    421.9     56  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=45 | void cutlass::Kernel2<cutlass_80_t=39
+  28    294.1    295.6    301.6    318.1     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | void cutlass::Kernel2<cutlass_80_t=35
+  29    293.9    298.0    328.4    320.3     36  void moe_decode_down_fp4_kernel<6>=51 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | oneshot_ar(uint4 const*, uint4*, P=35
+  30    293.8    297.1    336.1    317.9     36  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=45 | void cutlass::Kernel2<cutlass_80_t=33
+  31    395.5    398.6    411.8    420.3     56  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | void cutlass::Kernel2<cutlass_80_t=40
+  32    297.0    300.8    338.6    323.0     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=46 | void cutlass::Kernel2<cutlass_80_t=35
+  33    292.4    295.9    303.4    319.8     36  void moe_decode_down_fp4_kernel<6>=51 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | oneshot_ar(uint4 const*, uint4*, P=34
+  34    294.8    298.7    325.1    321.5     36  void moe_decode_down_fp4_kernel<6>=48 | moe_decode_gu_fp4_kernel(__nv_bflo=43 | oneshot_ar(uint4 const*, uint4*, P=38
+  35    396.6    400.5    443.4    424.5     56  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=45 | void cutlass::Kernel2<cutlass_80_t=40
+  36    296.9    298.7    308.3    320.9     36  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=44 | void cutlass::Kernel2<cutlass_80_t=35
+  37    299.4    301.0    304.4    323.6     37  void moe_decode_down_fp4_kernel<6>=50 | moe_decode_gu_fp4_kernel(__nv_bflo=46 | void cutlass::Kernel2<cutlass_80_t=34
+  38    299.0    302.9    311.8    324.0     37  void moe_decode_down_fp4_kernel<6>=49 | moe_decode_gu_fp4_kernel(__nv_bflo=45 | void cutlass::Kernel2<cutlass_80_t=34
+  39   4486.6   5117.6   6362.1   3551.7    553  oneshot_ar(uint4 const*, uint4*, P=755 | void cutlass::Kernel2<cutlass_80_t=352 | ampere_bf16_s16816gemm_bf16_64x64_=290
+SUM of per-layer medians (L0..L39) = 18685.1 us = 18.69 ms
+TAIL seg step 3 wall 5117.6 us  nk 553  busy 3551.7
+--- top20 kernels by time ---
+   754.7 us  x9    oneshot_ar(uint4 const*, uint4*, Ptrs, int, 
+   351.8 us  x16   void cutlass::Kernel2<cutlass_80_tensorop_s1
+   247.7 us  x6    ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_
+   235.4 us  x7    ncclDevKernel_AllGather_RING_LL(ncclDevKerne
+   174.5 us  x92   void at::native::vectorized_elementwise_kern
+   148.8 us  x42   void at::native::unrolled_elementwise_kernel
+   139.0 us  x69   memcpy32_post
+   108.0 us  x1    ampere_bf16_s16816gemm_bf16_128x64_ldg8_f2f_
+   105.6 us  x25   void at::native::elementwise_kernel<128, 4, 
+   101.2 us  x4    moe_decode_gu_fp4_kernel(__nv_bfloat16 const
+    84.6 us  x23   void at::native::index_elementwise_kernel<12
+    83.2 us  x15   rms_norm_f32w_kernel(__nv_bfloat16 const*, f
+    75.9 us  x20   void at::native::(anonymous namespace)::inde
+    70.1 us  x9    void cutlass::Kernel2<cutlass_80_wmma_tensor
+    66.0 us  x3    void moe_decode_down_fp4_kernel<3>(__nv_bflo
+    63.4 us  x22   void cublasLt::splitKreduce_kernel<32, 16, i
+    60.3 us  x8    _hc_gemv
+    56.3 us  x6    std::enable_if<!(false), void>::type interna
+    50.8 us  x1    void moe_decode_down_fp4_kernel<6>(__nv_bflo
+    49.1 us  x19   void at::native::(anonymous namespace)::CatA
+--- timeline coarse (gaps>40us) ---
+  GAP 76 us after 664 us  before ampere_bf16_s16816gemm_bf16_64x64_sliced
+  GAP 102 us after 959 us  before ampere_bf16_s16816gemm_bf16_64x64_sliced
+  GAP 872 us after 3406 us  before Memcpy HtoD (Pinned -> Device)
+  GAP 48 us after 4351 us  before Memcpy HtoD (Pinned -> Device)
+  GAP 189 us after 4459 us  before void at::native::vectorized_elementwise_
+BASE L16: 36 kernels 314.7 us
+=== L0 : 38 kernels  399.5 us   (extra vs L16) ===
+      +55.8 us  x+1  oneshot_ar(uint4 const*, uint4*, Ptrs, i
+      +30.1 us  x+1  ampere_bf16_s16816gemm_bf16_128x64_ldg8_
+      +11.0 us  x+1  engram_gate_kernel(__nv_bfloat16 const*,
+=== L1 : 105 kernels  549.4 us   (extra vs L16) ===
+      +42.1 us  x+20  void at::native::vectorized_elementwise_
+      +33.6 us  x+7  void at::native::(anonymous namespace)::
+      +32.2 us  x+1  ncclDevKernel_AllGather_RING_LL(ncclDevK
+      +29.9 us  x+10  void at::native::elementwise_kernel<128,
+      +20.9 us  x+6  void at::native::unrolled_elementwise_ke
+      +19.6 us  x+3  void cutlass::Kernel2<cutlass_80_tensoro
+=== L7 : 102 kernels  539.2 us   (extra vs L16) ===
+      +38.3 us  x+18  void at::native::vectorized_elementwise_
+      +30.5 us  x+10  void at::native::elementwise_kernel<128,
+      +27.4 us  x+6  void at::native::(anonymous namespace)::
+      +25.0 us  x+1  ncclDevKernel_AllGather_RING_LL(ncclDevK
+      +20.4 us  x+6  void at::native::unrolled_elementwise_ke
+      +19.8 us  x+3  void cutlass::Kernel2<cutlass_80_tensoro
+=== L13 : 105 kernels  621.5 us   (extra vs L16) ===
+      +43.8 us  x+1  oneshot_ar(uint4 const*, uint4*, Ptrs, i
+      +37.3 us  x+18  void at::native::vectorized_elementwise_
+      +30.7 us  x+1  ampere_bf16_s16816gemm_bf16_128x64_ldg8_
+      +29.5 us  x+10  void at::native::elementwise_kernel<128,
+      +27.2 us  x+6  void at::native::(anonymous namespace)::
+      +24.4 us  x+1  ncclDevKernel_AllGather_RING_LL(ncclDevK
+=== L19 : 167 kernels  855.0 us   (extra vs L16) ===
+      +94.1 us  x+13  void at_cuda_detail::cub::DeviceRadixSor
+      +78.4 us  x+33  void at::native::vectorized_elementwise_
+      +58.3 us  x+16  void at::native::elementwise_kernel<128,
+      +51.1 us  x+2  ncclDevKernel_AllGather_RING_LL(ncclDevK
+      +28.1 us  x+1  void at::native::reduce_kernel<512, 1, a
+      +26.7 us  x+5  void at::native::mbtopk::computeBlockwis
+=== L23 : 56 kernels  425.0 us   (extra vs L16) ===
+      +24.6 us  x+1  ncclDevKernel_AllGather_RING_LL(ncclDevK
+      +11.8 us  x+4  void at::native::elementwise_kernel<128,
+       +8.7 us  x+1  _score
+       +7.4 us  x+2  void at::native::vectorized_elementwise_
+       +7.1 us  x+1  _cand_b2
+       +7.1 us  x+1  _cand_b1

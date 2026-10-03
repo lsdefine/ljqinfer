@@ -1,0 +1,397 @@
+{
+  "baseline.json": [
+    {
+      "name": "short",
+      "body": {
+        "model": "ljqinfer-dsv41f",
+        "messages": [
+          {
+            "role": "user",
+            "content": "List the capitals of France, Italy and Japan."
+          }
+        ],
+        "max_tokens": 64,
+        "temperature": 0,
+        "reasoning_effort": "off"
+      },
+      "response": {
+        "id": "chatcmpl_2eccc6239a15418bb2b1af1b",
+        "object": "chat.completion",
+        "created": 1789459617,
+        "model": "ljqinfer-dsv41f",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "The capitals are:\n\n- **France** → Paris\n- **Italy** → Rome\n- **Japan** → Tokyo",
+              "refusal": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 14,
+          "completion_tokens": 25,
+          "total_tokens": 39
+        },
+        "ljqinfer": {
+          "input_tokens": 14,
+          "prefill_tokens": 14,
+          "model_prefill_seconds": 0.544817,
+          "chunks": 1,
+          "output_tokens": 25,
+          "queue_wait_seconds": 0.0020539467222988605,
+          "time_to_first_token_seconds": 0.550445,
+          "decode_seconds": 5.171883,
+          "total_seconds": 5.722328,
+          "decode_tps": 4.834,
+          "decode_steps": 12,
+          "accepted_tokens": 12,
+          "engine_decode_seconds": 5.167807200923562,
+          "prefill_seconds": 0.5448170923627913,
+          "decode_ms_per_step": 430.6506000769635,
+          "control_ms_per_step": 0.6390965621297559,
+          "model_step_host_ms": 429.9060778769975,
+          "output_sync_ms_per_step": 0.07014143435905378,
+          "stop_reason": "eos",
+          "mtp_accepted_per_step": 1.0,
+          "decode_tokens_per_step": 2.083,
+          "reasoning_effort": "off"
+        }
+      }
+    },
+    {
+      "name": "medium",
+      "body": {
+        "model": "ljqinfer-dsv41f",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Here is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nHere is an unrelated record: alpha beta gamma delta.\nReply with exactly READY."
+          }
+        ],
+        "max_tokens": 64,
+        "temperature": 0,
+        "reasoning_effort": "off"
+      },
+      "response": {
+        "id": "chatcmpl_8f5135c389114b4f8ccce6da",
+        "object": "chat.completion",
+        "created": 1789459619,
+        "model": "ljqinfer-dsv41f",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "READY",
+              "refusal": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 2430,
+          "completion_tokens": 3,
+          "total_tokens": 2433
+        },
+        "ljqinfer": {
+          "input_tokens": 2430,
+          "prefill_tokens": 2430,
+          "model_prefill_seconds": 1.995586,
+          "chunks": 1,
+          "output_tokens": 3,
+          "queue_wait_seconds": 0.0017891060560941696,
+          "time_to_first_token_seconds": 2.001128,
+          "decode_seconds": 0.440814,
+          "total_seconds": 2.441942,
+          "decode_tps": 6.806,
+          "decode_steps": 1,
+          "accepted_tokens": 1,
+          "engine_decode_seconds": 0.43657880602404475,
+          "prefill_seconds": 1.9955860376358032,
+          "decode_ms_per_step": 436.57880602404475,
+          "control_ms_per_step": 0.9005549363791943,
+          "model_step_host_ms": 435.40475284680724,
+          "output_sync_ms_per_step": 0.06920797750353813,
+          "stop_reason": "eos",
+          "mtp_accepted_per_step": 1.0,
+          "decode_tokens_per_step": 3.0,
+          "reasoning_effort": "off"
+        }
+      }
+    }
+  ],
+  "first_result.json": [
+    {
+      "name": "short",
+      "match": true,
+      "response": {
+        "id": "chatcmpl_9b978a791bc54e28ba7862d7",
+        "object": "chat.completion",
+        "created": 1789459764,
+        "model": "ljqinfer-dsv41f",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "The capitals are:\n\n- **France** → Paris\n- **Italy** → Rome\n- **Japan** → Tokyo",
+              "refusal": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 14,
+          "completion_tokens": 25,
+          "total_tokens": 39
+        },
+        "ljqinfer": {
+          "input_tokens": 14,
+          "prefill_tokens": 14,
+          "model_prefill_seconds": 0.551427,
+          "chunks": 1,
+          "output_tokens": 25,
+          "queue_wait_seconds": 0.002174959983676672,
+          "time_to_first_token_seconds": 0.557125,
+          "decode_seconds": 0.288604,
+          "total_seconds": 0.845729,
+          "decode_tps": 86.624,
+          "decode_steps": 8,
+          "accepted_tokens": 16,
+          "engine_decode_seconds": 0.2854706682264805,
+          "prefill_seconds": 0.5514270281419158,
+          "decode_ms_per_step": 35.68383352831006,
+          "control_ms_per_step": 0.42122823651880026,
+          "model_step_host_ms": 35.194553958717734,
+          "output_sync_ms_per_step": 0.029475311748683453,
+          "stop_reason": "eos",
+          "mtp_accepted_per_step": 2.0,
+          "decode_tokens_per_step": 3.125,
+          "reasoning_effort": "off"
+        }
+      }
+    },
+    {
+      "name": "medium",
+      "match": true,
+      "response": {
+        "id": "chatcmpl_3ede80726b7a4249892a8bb4",
+        "object": "chat.completion",
+        "created": 1789459767,
+        "model": "ljqinfer-dsv41f",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "READY",
+              "refusal": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 2430,
+          "completion_tokens": 3,
+          "total_tokens": 2433
+        },
+        "ljqinfer": {
+          "input_tokens": 2430,
+          "prefill_tokens": 2430,
+          "model_prefill_seconds": 1.988214,
+          "chunks": 1,
+          "output_tokens": 3,
+          "queue_wait_seconds": 0.0011244839988648891,
+          "time_to_first_token_seconds": 1.993499,
+          "decode_seconds": 0.040451,
+          "total_seconds": 2.03395,
+          "decode_tps": 74.163,
+          "decode_steps": 1,
+          "accepted_tokens": 1,
+          "engine_decode_seconds": 0.03687580022960901,
+          "prefill_seconds": 1.988213560078293,
+          "decode_ms_per_step": 36.87580022960901,
+          "control_ms_per_step": 0.5995319224894047,
+          "model_step_host_ms": 36.06354212388396,
+          "output_sync_ms_per_step": 0.029929913580417633,
+          "stop_reason": "eos",
+          "mtp_accepted_per_step": 1.0,
+          "decode_tokens_per_step": 3.0,
+          "reasoning_effort": "off"
+        }
+      }
+    }
+  ],
+  "tool_result.json": [
+    {
+      "protocol": "openai",
+      "stream": false,
+      "calls": [
+        [
+          "get_weather",
+          {
+            "location": "Beijing"
+          }
+        ]
+      ],
+      "stop": "tool_calls",
+      "passed": true,
+      "seconds": 1.8631276092492044
+    },
+    {
+      "protocol": "openai",
+      "stream": true,
+      "calls": [
+        [
+          "get_weather",
+          {
+            "location": "Beijing"
+          }
+        ]
+      ],
+      "stop": "tool_calls",
+      "passed": true,
+      "seconds": 1.3103794087655842
+    },
+    {
+      "protocol": "anthropic",
+      "stream": false,
+      "calls": [
+        [
+          "get_weather",
+          {
+            "location": "Beijing"
+          }
+        ]
+      ],
+      "stop": "tool_use",
+      "passed": true,
+      "seconds": 1.3496139431372285
+    },
+    {
+      "protocol": "anthropic",
+      "stream": true,
+      "calls": [
+        [
+          "get_weather",
+          {
+            "location": "Beijing"
+          }
+        ]
+      ],
+      "stop": "tool_use",
+      "passed": true,
+      "seconds": 1.2607365460135043
+    }
+  ],
+  "long_result.json": {
+    "id": "chatcmpl_b34bf7bd0d1b4916b41ba695",
+    "object": "chat.completion",
+    "created": 1789459879,
+    "model": "ljqinfer-dsv41f",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "READY",
+          "refusal": null
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 37410,
+      "completion_tokens": 3,
+      "total_tokens": 37413
+    },
+    "ljqinfer": {
+      "input_tokens": 37410,
+      "prefill_tokens": 37410,
+      "model_prefill_seconds": 22.277055,
+      "chunks": 4,
+      "output_tokens": 3,
+      "queue_wait_seconds": 0.005913004279136658,
+      "time_to_first_token_seconds": 22.29686,
+      "decode_seconds": 0.03732,
+      "total_seconds": 22.33418,
+      "decode_tps": 80.385,
+      "decode_steps": 1,
+      "accepted_tokens": 1,
+      "engine_decode_seconds": 0.033597062807530165,
+      "prefill_seconds": 22.27705528587103,
+      "decode_ms_per_step": 33.597062807530165,
+      "control_ms_per_step": 0.8779498748481274,
+      "model_step_host_ms": 32.61179802939296,
+      "output_sync_ms_per_step": 0.029929913580417633,
+      "stop_reason": "eos",
+      "mtp_accepted_per_step": 1.0,
+      "decode_tokens_per_step": 3.0,
+      "reasoning_effort": "off"
+    }
+  },
+  "after_disconnect.json": {
+    "id": "chatcmpl_dc918e3757d84b398add03de",
+    "object": "chat.completion",
+    "created": 1789459880,
+    "model": "ljqinfer-dsv41f",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "READY",
+          "refusal": null
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 3,
+      "total_tokens": 13
+    },
+    "ljqinfer": {
+      "input_tokens": 10,
+      "prefill_tokens": 10,
+      "model_prefill_seconds": 0.563949,
+      "chunks": 1,
+      "output_tokens": 3,
+      "queue_wait_seconds": 0.029851263854652643,
+      "time_to_first_token_seconds": 0.596921,
+      "decode_seconds": 0.034844,
+      "total_seconds": 0.631765,
+      "decode_tps": 86.098,
+      "decode_steps": 1,
+      "accepted_tokens": 1,
+      "engine_decode_seconds": 0.03148756502196193,
+      "prefill_seconds": 0.5639492268674076,
+      "decode_ms_per_step": 31.487565021961927,
+      "control_ms_per_step": 0.6827590987086296,
+      "model_step_host_ms": 30.688872560858727,
+      "output_sync_ms_per_step": 0.03110244870185852,
+      "stop_reason": "eos",
+      "mtp_accepted_per_step": 1.0,
+      "decode_tokens_per_step": 3.0,
+      "reasoning_effort": "off"
+    }
+  },
+  "gpu_pytest": "....                                                                     [100%]\n4 passed in 2.31s\n",
+  "boundaries": [
+    "Single graph; capacity=1048576, chunk=12288.",
+    "Output agrees in two baseline requests, but short speculative rounds changed 12->8; NOT trace equivalence.",
+    "Score fill, NCCL all_reduce and candidate sorting remain capacity sized.",
+    "No full-1M input or official HF oracle validation.",
+    "HTTP vs direct model same-config overhead not independently benchmarked.",
+    "Staged index visibility follows previous effective path; not fixed in this change."
+  ]
+}

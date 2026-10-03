@@ -1,0 +1,12 @@
+[project]
+name = "ljqinfer-dsv41f-eptp8"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["torch", "fastapi", "uvicorn", "anyio", "requests", "tokenizers", "safetensors", "numpy", "sympy", "Pillow"]
+
+[project.optional-dependencies]
+test = ["pytest", "httpx"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

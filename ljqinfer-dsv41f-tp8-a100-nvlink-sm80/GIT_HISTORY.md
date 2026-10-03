@@ -2948,3 +2948,1425 @@ Step time (server decode clock, 64 tokens, same prompts, A/B against e690656)
   short prompt  2.709-2.740 ms/token   e690656: 2.716-2.815
   16k prompt    2.797-2.800 ms/token   e690656: 2.786-2.797
 ```
+
+---
+
+```text
+B4: run a whole batch through one decode step
+
+Every row-sized workspace is now cut for B*Q rows, the placeholder page table
+carries one row per slot (the kernel addresses it through the slot->row map),
+the engram hash keeps one memo per request in flight, and a staged engram row
+buffer is only reused when its row count matches the hidden state it feeds:
+a buffer staged by a single window belongs to that window, so a batched step
+must re-gather instead of handing engram_gate fewer kv rows than x rows --
+that mismatch was an out-of-bounds read inside the fused gate (layer 1).
+
+Measured inside the live engine (BATCH_PROBE, 8-rank TP, q=6, four rows
+prefilled for real to 512/499/486/473 tokens on their own slots):
+
+  b=1  68.88 ms/step  68.88 ms/req   87.1 tok/s
+  b=2  69.71 ms/step  34.85 ms/req  172.1 tok/s
+  b=3  76.95 ms/step  25.65 ms/req  233.9 tok/s
+  b=4  76.99 ms/step  19.25 ms/req  311.7 tok/s
+
+Step time grows 11.8% from b=1 to b=4 while per-request cost drops 3.6x.
+
+Correctness (BATCH_CHECK, same rows alone vs batched, max |dlogit|):
+
+  floor, one row twice alone      1.62          (this path's own jitter)
+  b=1 through the batched call    1.69  argmax match
+  b=4 rows                        2.0/2.2/3.8/2.0, argmax 3/4 match
+
+So the batched call adds no systematic error: it sits at the repeat-run floor
+of this path. Both sides must read engram rows from the same place for the
+comparison to mean anything -- comparing against a leftover staged buffer
+from prefill reads 5-13 instead.
+```
+
+---
+
+```text
+B5-1: publish the accepted prefix of a whole batch in one commit call
+
+decode.commit now takes the batch as it comes: the slot tuple, the cursor of
+every request and the accepted count of every request. Each layer walks the
+residual ring per request (the ring destinations of two requests may collide,
+so those index_copy_ calls stay separate) and then publishes every compressor
+row of the batch in a single commit_pair launch: the kernel already addresses
+its source by a fixed per-request stride, which is exactly how compress_rows
+lays the staged rows out.
+
+Measured through the server's own decode clock (probe_conc.py, 64 tokens per
+request, count-from-1 prompt, window 6 chunk 2048):
+
+  B=1  step 15.253 ms  wall 0.536 s  182 tok/s
+  B=2  step 15.614 ms  wall 0.713 s  180 tok/s
+  B=3  step 15.398 ms  wall 1.051 s  183 tok/s
+  B=4  step 15.344 ms  wall 1.407 s  182 tok/s
+  B=1  step 15.239 ms  (repeat, no regression against the 15.6 ms baseline)
+
+Every request returns the correct counting sequence. The step time per request
+does not move because the speculative loop still captures one graph per slot:
+the requests take turns rather than share a step. Batching that loop is next.
+```
+
+---
+
+```text
+B5-2a: batch the verify graph (SpecDecoder.capture_b / step_gb)
+
+One captured verify graph per slot tuple: qin[B,W], per-row keep count
+1 + (qin[:,1:] == greedy[:,:-1]).cumprod(1).sum(1), a single pinned D2H for
+keep+greedy, rebase(tuple(starts)) and commit(tuple(acc), slot=slots).
+Draft and seed stay per-row eager for now.
+
+Measured in the live TP8 engine (BATCH_SPEC=1 BATCH_PROBE=1,2,3,4), four real
+prefilled slots, lens 512/499/486/473:
+
+  single_ref step_g  ms=15.417  tok_per_step=1.10
+  step_gb b=1        ms=24.289  tok_per_step=1.00  ms_per_req=24.289
+  step_gb b=2        ms=35.545  tok_per_step=2.00  ms_per_req=17.773
+  step_gb b=3        ms=69.995  tok_per_step=3.00  ms_per_req=23.332
+  step_gb b=4        ms=82.261  tok_per_step=4.00  ms_per_req=20.565
+
+Correctness: accepted counts match the single-request graph path on the same
+slot and the same token stream (1.0 vs 1.10 -- the drafter does not hit on a
+synthetic (i*7+11)%60000 stream, so the counts are language, not a batch bug).
+
+Two protocol bugs fixed while getting here:
+- the captured body waits on an Engram gate the host raises, so the replay
+  must be issued *before* stage_engram(..., gated=True) (with
+  release_engram_gates() on error); staging first hangs every rank in
+  synchronize() with the GPU idle.
+- capture needs scratch.pos_t = None plus inference_mode and
+  capture_error_mode='thread_local', as the single path does.
+
+Remaining gap is the per-row eager draft+seed (~9ms of launch per row): b=1
+costs 24.3ms against 15.4ms for the same work and b=2->b=3 jumps more than
+b=3->b=4.  Next step is capturing draft+seed for the whole batch.
+```
+
+---
+
+```text
+B5-2b: capture the drafter per slot instead of replaying it eagerly
+
+step_gb ran the drafter and the seed eagerly, one call per row.  Measured on
+a live TP8 engine with four real prefilled slots (512/499/486/473), that is
+where the whole batch gain went:
+
+  single step_g            15.363 ms   draft graph 1.642   seed graph 0.210
+  step_gb b=1  22.53 ms    verify 13.694  draft(eager) 7.557  seed 0.738
+  step_gb b=4  81.42 ms    verify 48.153  draft(eager) 29.147 seed 2.839
+
+The eager drafter costs 7.6 ms a row against 1.6 ms for the same work
+replayed: it is a five-row MoE, so it is all launch overhead.  capture_b now
+captures one draft graph and one seed graph per slot, on two persistent
+buffers the round refills from the verify output, and step_gb replays them.
+
+  step_gb b=1  16.165 ms  verify 13.658  draft 1.966  commit 0.434
+  step_gb b=2  22.938 ms  verify 18.262  draft 3.891  -> 11.469 ms/req
+  step_gb b=3  51.023 ms  verify 44.159  draft 5.836  -> 17.008 ms/req
+  step_gb b=4  56.978 ms  verify 47.945  draft 7.772  -> 14.245 ms/req
+
+Throughput against the single path measured in the same run: b=2 87.2 tok/s
+vs 65.4, i.e. 1.33x; b=4 70.2 tok/s, 1.07x.  Accepted counts match the single
+path (1.0 vs 1.10 on this synthetic token stream, where the drafter hits
+nothing for either path).
+
+Left on the table: verify is 13.7 / 18.3 / 44.2 / 47.9 ms for b=1..4, which is
+not monotone in the row count -- the 18-row shape takes a bad path somewhere in
+the verify body.  Fixing that is worth about 20 ms at b=4.
+```
+
+---
+
+```text
+hc_pre: stop choosing the tile that spills
+
+_hc_gemv keeps acc and ss as [TP, BK] FP32 accumulators, so TP alone decides
+whether a program's live state fits in registers: at BK=256 and TP=32 that is
+64KB and the kernel spills to local memory.  tp was
+next_power_of_2(rows) capped at 32, which reaches 32 at seventeen rows and
+never comes back down, so MTP verify past b=2 -- and every prefill tile --
+ran the spilled variant.
+
+One H100, K=28672, W=24, BK=256, 2 warps, microseconds per launch, output
+bitwise identical across every TP:
+
+    rows     tp=2    tp=4    tp=8    tp=16    tp=32
+       6     39.5    39.8    38.9    23.9    384.1
+      18     23.0    23.0    22.9    23.4    383.2
+      24     23.3    22.9    22.8    22.9    386.9
+     128     62.3    51.9    53.8    59.8   1646.3
+     512    270.9   255.6   237.8   266.7   6696.3
+    2048   1067.9  1004.7   938.5  1043.3  26867.0
+
+Eight rows a program is at or inside the noise of the best column everywhere
+past sixteen rows; the short tiles prefer sixteen.
+
+In the engine (TP8, four live slots, W=6, so 6/12/18/24 verify rows), the
+kernel's own average went 241.7us -> back to single digits at b=3, and the
+phase it sits in follows:
+
+    b      verify before   verify after     step before   step after
+    1          13.7            14.3            16.2         16.8
+    2          18.3            18.3            22.9         22.9
+    3          44.3            23.3            51.0         30.5
+    4          48.3            26.7            57.8         36.2
+
+Verify is monotone in rows again.  Per-request step time at b=4 is 9.04ms
+against 15.84ms for the single-request reference, so four concurrent streams
+now cost 1.76x the throughput of one (110.7 tok/s vs 63.1).
+```
+
+---
+
+```text
+probe: drop the one-shot kernel profiler
+```
+
+---
+
+```text
+drafter batched draft: one captured graph per batch, 130 tok/s at b=4
+
+The drafter still spoke single-slot: seed/__call__ took a python int slot and
+a 1-D position vector, so a batched round had to loop the drafter per request
+and the draft phase grew linearly (7.65ms of the 35.31ms step at b=4).
+
+past.gather/scatter now accept [B,W] positions against a device-held slot
+vector, dspark's seed and draft rounds carry the batch dimension through the
+projection scratch and the routed experts (both sized by max_batch at build
+time), and capture_b records one graph for the seed plus the draft block.
+
+The captured graph must keep its closures alive: dropping the sbody/dbody
+references from the block dict lets the scratch they own be freed and reused,
+after which replay reads recycled rows and the index kernel asserts at b>=2.
+The fused FP4 decode kernel is not implicated; it stays pinned.
+
+probe_batch, 512-token prefills, same run (BATCH_SPEC=1, --max-batch 4):
+  single_ref  15.76ms            (no regression, was 15.81)
+  b=1  16.83ms  16.83 ms/req   59.4 tok/s  verify 14.17  draft 2.12
+  b=2  21.53ms  10.76 ms/req   92.9 tok/s  verify 18.29  draft 2.44
+  b=3  26.92ms   8.97 ms/req  111.5 tok/s  verify 23.20  draft 2.63
+  b=4  30.64ms   7.66 ms/req  130.5 tok/s  verify 26.53  draft 2.82
+tok_per_step equals the batch and every request accepts, so the rounds are
+真批 rather than a padded replay of one request.
+
+Against B5-1 (35.31ms, 8.83 ms/req, 113.3 tok/s at b=4): step -13.2%,
+throughput +15.5%, draft phase -63%. Verify is now 87% of the step, which is
+where the next cut belongs.
+```
+
+---
+
+```text
+spec: per-row engram history for batched verify
+
+Each row of a batch keys Engram by its own committed tail.  The decoder-wide
+history can only describe one row, so _hists() sliced the same tail for every
+row and all rows but one were staged with the wrong n-gram.  The harness hid
+it: all rows shared one prompt and acc stayed 1.
+
+The tail now rides on SpecState.hist and advances from the per-row host copy
+of the verify window, so it costs no extra device sync.  step_g carries it as
+well -- a row that ran as a single request first otherwise joins a batch with
+an empty tail and trips the Engram 'exact raw token history' check.
+
+Same harness, b=4 three samples: 32.80 / 32.80 / 33.73 ms (verify 28.60)
+versus baseline acd02e8 32.95 / 32.92 / 32.58 ms (verify 28.48-28.80).
+No step-time cost.  b=2 22.51 ms, b=3 29.56 ms, acc [1,1,1,1] unchanged.
+```
+
+---
+
+```text
+spec: keep one batched verify graph per slot tuple
+
+The batch graph was cached in a single attribute keyed by the slot tuple, so
+any change of the batch -- one request leaving, one joining -- threw the graph
+away and re-captured on the spot.  A re-capture runs its warmup passes over
+live KV pages and costs hundreds of ms inside a decode round, which is exactly
+what dynamic batching does all the time.  The graphs now live in a dict keyed
+by the tuple, so a tuple seen before replays immediately.
+
+The seed closure was reading ``self._b['hidden']`` at replay time: with more
+than one graph alive that lookup would seed a request from another batch's
+verify output, so it is now bound to the buffer this capture wrote.
+
+Measured with BATCH_PROBE=2,3,4,2,4 (BATCH_SPEC harness, 8x A100, slots 1-4):
+capture_b fires exactly three times, once per tuple; the repeat visits to
+(1,2) and (1,2,3,4) capture nothing and step in 22.426 ms and 32.654 ms
+against 22.482 ms and 35.854 ms on their first visit.  acc [1,1,1,1]
+unchanged.  Baseline 0270db1 b=4 was 32.80/32.80/33.73 ms, so replay cost is
+untouched; the win is that leaving the batch no longer stalls a round.
+```
+
+---
+
+```text
+spec: the row's token history lives on the row
+
+After the batched verify learned to key Engram per row, the decoder still kept
+a committed-history list of its own and the single-row paths still read their
+n-gram from it.  Two sources of truth for the same fact: a row could be stepped
+through step_g (reading the decoder list) and then join a batch (reading its
+own tail), and nothing guaranteed the two agreed.
+
+The list is gone.  ``open`` now takes the row's prefix as a required argument,
+the tail rides on SpecState, and step/step_g/capture/step_gb all read the same
+field -- single row is just b=1 of the batched story.  _history() and the
+constructor's history argument are deleted, four call sites updated.
+
+Same harness, plan 2,3,4,2,4: single_ref 16.306 ms tok/step 1.20 (bfc689f:
+16.287 / 1.10), b=2 22.589, b=3 28.272, b=4 33.114 then 32.598 ms, acc all 1.
+Matches bfc689f (22.426 / 28.35 / 32.654) -- no step-time cost.
+```
+
+---
+
+```text
+spec: step_gb returns per-row committed tokens instead of a count
+
+step_gb already had each row's committed ids on the host (qinh[r][:acc[r]]),
+but only handed back the accepted counts, so a batched caller could not emit
+tokens at all. It now returns (states, toks) with toks[r] the tuple of ids
+committed this round -- the same shape of answer step_g gives for one row.
+probe_batch derives acc from len(toks[r]).
+
+Bench (TP8 A100x8, BATCH_PROBE=2,3,4, identical prompts):
+  b=2 22.449 ms   b=3 29.669 ms   b=4 32.648 ms   acc=[1,..] tok_per_step=b
+Same distribution as 998c18d (22.59 / 28.27 / 32.60-33.11): zero cost.
+```
+
+---
+
+```text
+engine: one Row per request; the engine keeps no per-request state
+
+Engine held the live request in its own fields (session/hit_tokens/phases) and
+exposed only prefill+generate, so a second concurrent request could not even be
+represented.  That state now lives in Row (slot, tokens, session, hit_tokens,
+phases, state, first) and the engine offers three calls instead:
+
+  open_row(tokens) -> Row      prefill + spec.open, the row owns what it opened
+  step_rows(rows)  -> [ids..]  one round for ANY subset of rows; 1 row takes the
+                               single-row graph, >=2 the batched graph on slots
+  close_row(row)               stop decoding, keep slot+cold lease for reuse
+
+generate() is now a thin loop over the three, and warmup uses them too, so the
+batched scheduler can reuse the identical calls.  A closed row keeps its slot
+and its cold lease until the next open_row resets them (field `resident`) --
+exactly the old "close the prior session at the start of the next prefill" rule.
+output_sync_ms_per_step is dropped: the host sync it measured (0.0015 ms/step)
+now sits inside step_rows and is counted in model_step_host_ms.
+
+Harness (TP8 A100x8, BATCH_SPEC=1 BATCH_PROBE=2,3,4):
+  b=1 ref 16.263   b=2 22.415   b=3 28.021   b=4 34.648 ms/step
+  (b3b367c: 16.296 / 22.449 / 29.669 / 32.648 -- same distribution)
+End-to-end through the server (real requests):
+  13-tok prompt twice   -> identical text, 16.97 / 15.74 ms/step, accepted 34/20
+  730-tok prompt twice  -> cache_hit_tokens 0 then 586, prefill 0.41 / 0.60 s,
+                           16.38 / 16.18 ms/step   (deferred lease still works)
+```
+
+---
+
+```text
+spec: one set of B1 verify graphs per slot
+
+capture() hung its eighteen buffers and its three graphs off self, so the
+set captured for the first slot was replayed for every other slot: a
+second concurrent request would decode against the first slot's KV.  The
+buffers and graphs now live in one dict per slot (self._g[slot]);
+capture() fills that dict and returns it, and step_g() picks up its own
+slot's set, capturing on first use.  Nothing got wrapped -- the same
+eighteen fields moved from self._x to g['x'], so the bodies read the same.
+
+Correctness (probe_spec, BATCH_SPEC=1): the same 384-token prompt decodes
+16 tokens four times on slot 1 and four times on slot 2, after a discarded
+warm-up decode.  The prompt sits on an argmax near-tie, so even a fixed
+slot yields two sequences (2+2); both slots yield the same two with the
+same counts:
+
+  BATCH_SPEC slot_agree slotA=1 slotB=2 majority_equal=True
+                        sets_equal=True spreadA=2 spreadB=2
+
+so the cross-slot spread is exactly the within-slot control.  Before this
+change the second slot replayed the first slot's graph and its KV.
+
+Step time is unchanged (ms/step over three runs, baseline in parens):
+
+  b=2  22.260 / 22.387 / 22.400  (22.415)
+  b=3  27.997 / 28.072 / 28.086  (28.021)
+  b=4  32.461 / 32.518 / 32.609  (34.648)
+```
+
+---
+
+```text
+verify graph: one graph per batch width, not per slot
+
+The verify body used to be captured per slot tuple, so a four-slot engine
+kept a graph for every set of rows it happened to see and B1 was bound to
+the slot it was captured on. The row map is what made the graph slot-bound,
+so it becomes a buffer at a fixed address: the capture only reads it, and
+the runner refills it before every replay. Filling it during capture bakes
+a host-to-device memcpy into the graph, which hangs all eight ranks on the
+step's synchronize -- the capture now hands out the address alone.
+
+Single-shot capture/step_g is gone; step_gb serves width one as well.
+
+Same probe, same engine, before and after (q=6, 20 steps, ms/step):
+                b=1      b=2      b=3      b=4
+  before      68.542   68.922   75.979   75.990
+  after       68.737   69.462   76.690   77.104
+BATCH_CHECK is unchanged to the digit, including the row-2 argmax
+mismatch at b=4, which is older than this commit and still open.
+```
+
+---
+
+```text
+probe the decode path on its graphs, not on an eager copy
+
+The batch probe timed `model.forward` directly.  Decode never runs that way:
+it replays captured graphs, so the eager numbers (68-77ms/step) described a
+path that does not exist in the service, which reads ~16-20ms.  The graph
+probe that did exist, probe_spec, still reached for `_g[slot]['dgraph']` and
+`['sgraph']` -- the pre-e09e860 layout -- so it raised KeyError the moment
+the graphs became one-per-width, and the eager probe was all that answered.
+
+Delete the eager probe.  Point BATCH_PROBE at the graph probe, teach it the
+current layout (seed and draft share `_g[1]['d']['graph']`), and check the
+batch for correctness where it runs: the same prompt in every row of a
+width-4 batch, decoded 16 tokens through step_gb.
+
+  slot_agree   majority_equal=True sets_equal=True
+  batch_agree  b=4 r=0..3 in_ref=True, all four rows identical
+  single_ref   16.901 ms  (verify graph alone)
+  draft_seed    1.908 ms
+  b=1  19.810 ms  65.6 tok/s  verify=17.175 commit=0.430 draft=2.095
+  b=2  22.111 ms  90.5 tok/s  verify=18.905 commit=0.675 draft=2.403
+  b=3  27.556 ms 108.9 tok/s  verify=23.813 commit=0.900 draft=2.697
+  b=4  31.741 ms 126.0 tok/s  verify=27.622 commit=1.140 draft=2.815
+
+Four rows cost 1.60x one row, so throughput nearly doubles and per-request
+latency drops to 7.935 ms.  It also settles the row-2 mismatch the eager
+check used to report: on the graphs all four rows decode the same sequence,
+so that was the eager copy misreading the batch, not the batch.
+```
+
+---
+
+```text
+time the batch steps without the profiler running
+
+The phase profiler was switched on before t0, so every timed step carried a
+stream sync between host_in, verify, commit and draft.  That tax landed in
+the headline number: b=1 read 19.810ms while single_ref -- the same step_gb
+call on the same width-1 graph, just outside the profiled loop -- read
+16.901ms.  A 17% gap between one path and itself.
+
+Phases now get their own loop after the timing loop, and the two agree:
+single_ref 17.322 vs b=1 17.314ms, 0.05% apart.  So the batch entry costs a
+width-1 request nothing, which is what the numbers could not show before.
+
+Clean, same run, prompts 473-512 tok:
+  b=1 17.314ms  63.5 tok/s  17.314 ms/req
+  b=2 21.778ms  91.8 tok/s  10.889 ms/req
+  b=3 27.157ms 110.5 tok/s   9.052 ms/req
+  b=4 33.871ms 118.1 tok/s   8.468 ms/req
+Four rows cost 1.96x one row: throughput +86%, per-request latency -51%.
+Phases at b=1 -> b=4: verify 14.971 -> 28.065, draft 2.088 -> 2.774,
+commit 0.435 -> 1.154, host_in 0.104 -> 0.146.  Verify is the whole story.
+Run-to-run spread is about 2ms at b=4, so these are not 0.1ms claims.
+batch_agree still reports all four rows identical to the width-1 reference.
+```
+
+---
+
+```text
+fix(spec): step_gb returned the verify window, not the greedy output
+
+The batched round handed the caller ``qinh[:acc]`` -- the verify *input*
+window, whose row 0 is the token the previous round already emitted.  The
+single path has always returned ``greedy[:accepted]`` and kept the window
+for the n-gram tail only (spec_decode.py:89 vs :98); the batched path
+collapsed the two.  Every served reply was therefore shifted by one: the
+prefill argmax was emitted twice and the last token of each round was
+dropped.  Since B6-1 routed generate() through step_rows/step_gb this hit
+every request, and agreement checks could not see it -- both sides of the
+comparison were shifted alike.
+
+``g['hgre']`` already holds the host copy of greedy (copied next to
+``hkeep``, before the same sync), so the fix costs no extra device sync.
+
+api_audit semantics, before -> after:
+  2+2                -> '44'          -> '4'
+  reply BANANA       -> 'BBANANA'     -> 'BANANA'
+  capital of China   -> '北京北京'     -> '北京'
+  count 1..8         -> '11 2 ... 8'  -> '1 2 3 4 5 6 7 8'
+  6/6 expected substrings now match, semantics_bad=0.
+Step time unchanged (no new sync): b=1 17.3 / b=2 21.8 / b=4 33.9 ms.
+```
+
+---
+
+```text
+B6-3a1: engine borrows slots from the pool instead of owning one
+
+Engine held a single slot allocated once in build(), and a finished row kept
+that slot (plus its cold lease) alive as `resident` so the next request could
+match its prefix.  With one slot nailed to the engine no second row can exist,
+which is the floor under the serial behaviour of the API: eight concurrent
+requests still cost 8x one request.
+
+Now a row borrows a slot in open_row and hands it back in close_row:
+  - Engine loses `slot` and `resident`; Row carries the slot it borrowed.
+  - open_row takes whatever the pool (or the cold session) hands out, so the
+    two asserts that demanded slot identity are gone.
+  - close_row closes the cold session -- which publishes this row's KV to the
+    host cache and releases the slot -- or releases the slot directly.
+    Cross-request prefix reuse now comes from the cold copy, not from a slot
+    kept warm, so retiring a row no longer blocks the next one.
+All ranks run the same open/close sequence against identically ordered free
+lists, so every rank picks the same slot without exchanging it.
+
+Measured (slots=6, max-batch=4, chunk=2048, max-seq=8192):
+  semantics 6/6 ok (greedy substring audit, incl. prefix-reuse case)
+  n=1 wall 1.35s vs 1.34s before  -> no single-request regression
+  n=8 wall 9.54s, ttft p50 4.96s  -> still serial, batching lands in B6-3b
+```
+
+---
+
+```text
+B6-3b1: opcode control plane -- rank0 publishes, other ranks obey
+
+The header was [n_tokens, max_new, reserved, exit]: it could only say
+'one request runs start to finish', so no second row could ever move.
+It is now [op, arg, n_rows, *row_ids] with OPEN/STEP/CLOSE/STOP.  Rank 0
+is the only decision maker and publishes one action per round; every other
+rank runs follow() and obeys.  Because a STEP names its rows, the set of
+rows advancing together can now change from round to round -- that is the
+prerequisite for boarding a running batch (the scheduler itself is next).
+
+Rows are registered in Engine.rows (row_id -> Row) identically on every
+rank, since every rank obeys the same header stream.  Cancellation no
+longer needs a collective: rank 0 just stops issuing STEPs, so a cancel
+lands the round it arrives instead of up to 4 rounds late, and the
+per-round cancel broadcast is gone.
+
+Measured (slots=6, max-batch=4, tests/api_audit.py):
+  semantics 6/6 ok (was 6/6)
+  n=1 wall 1.34s (baseline 1.34s) -- the extra per-step header broadcast
+    costs nothing measurable
+  n=2/4/6/8 wall 2.39/4.76/7.13/9.56s, still serial as expected: the
+    control plane can now express a batch, nothing decides to form one yet
+  staggered n=4/n=8 wall 4.74/9.47s, ok 4/4 and 8/8
+```
+
+---
+
+```text
+B6-3: fix batch verify window off-by-one -- batch speculation now lands
+
+model/spec_decode.py _qrows: the verify window is the accepted token followed
+by the *proposals*, i.e. draft[1:w], not draft[:w-1].  draft[0] merely restates
+the token the round already holds, so reading proposals from index 0 shifted
+every one of them by a slot and no draft could ever be reproduced by the
+backbone's argmax.  The single path (step) always built draft[1:w]; the batch
+path is now byte-identical to it.
+
+Measured with BATCH_PROBE inside the engine (8xA100 TP8, DeepSeek-V4.1-Flash,
+window=6, 64-token runs, same prompt on every row):
+
+  acceptance histogram, b=4   before [(1,220)]  -- speculation dead
+                              after  [(1,177),(2,8),(3,9)]
+                  single path        [(1,39),(2,6),(3,4)]
+
+  step time / throughput   single_ref  16.785 ms  1.30 tok/step   77 tok/s
+                           b=2         24.307 ms  2.20 tok/step   90.5 tok/s
+                           b=3         27.653 ms  3.30 tok/step  119.3 tok/s
+                           b=4         33.295 ms  6.00 tok/step  180.2 tok/s
+
+  b=4 phases (sync-split)  host_in 0.151  verify 33.562  commit 1.254
+                           draft 2.802 ms
+
+Correctness: four identical prompts in one batch emit bit-identical streams,
+including after a row drops off mid-run; slot_agree and batch_agree both pass.
+
+The residual b=4 vs b=1 token difference is not a defect: at the first
+divergence the top-2 logits are 18.000 vs 17.875 -- exactly one bf16 ULP apart,
+a numerical tie broken differently by a different GEMM shape.  Both
+continuations are well-formed and re-converge a few tokens later.  Batch-
+internal determinism (the property that actually matters) is exact.
+
+strategy/decode_worker.py also lands the b2 control-plane rework (Lane /
+RequestTooLong: admit / take / dismiss, one set of books for the single-request
+path and the scheduler) plus the BATCH_PROBE in-engine harness used above.
+```
+
+---
+
+```text
+fix(engram): reserve row staging once instead of reallocating per shape
+
+PrefillEngram.stage reallocated _rows_buf whenever the row count changed, but
+its address is baked into the captured decode graphs: a single-path step (6
+rows) and a batched step (24 rows) share the layer, so every shape flip left
+the captured replays reading a buffer nobody writes again.  Reserve the batch
+capacity once from the row workspace and stage into a prefix view.
+
+het r=0 got [8,271,643] -> [8,21,47,60,73] (greedy 8,21,34,47,60,73)
+homogeneous batch long r=0..3 matches_single True 4/4
+LDIAG first step: all 40 layers identical SP vs GB (was diverging at layer1)
+```
+
+---
+
+```text
+decode: keep a round's result out of the graph's space
+
+A batched round handed each request a SpecState made of views into the
+draft graph's own output buffers (dtok/dh/ids/score). Those buffers are
+the graph's fixed space: the next replay writes over them, so a state
+held by a request that has not stepped yet is silently rewritten with
+another request's numbers. A uniform batch hid this, every row moving in
+lockstep writes back what the row already expected; a batch of mixed
+prompt lengths showed it at once (row 0 at plen 256 expected 21 and read
+34, the value row 1 at plen 208 had just written).
+
+Each slot now owns a row of a preallocated store, shaped once from the
+graph's buffers, and the round is index_copy_'d into it before anything
+can replay. Nothing is allocated per round and a state stays valid until
+its own slot steps again.
+
+Three more spaces were shared the same careless way:
+- staging ran under a mid-graph gate, so the leading layers could read a
+  staging row still being written; it now completes before the replay.
+- the engram hash memo keys on the identity of the token buffer, but a
+  captured batch reuses one staging buffer forever, so rows described a
+  window the batch had already left; the memo is dropped per pass.
+- slot_rows copied the row map asynchronously out of a single reused
+  host row that the next batch overwrites; the copy is synchronous now.
+- paged_commit now checks a row only publishes into pages its own slot
+  claimed, instead of walking into a neighbour's.
+
+Measured with the in-engine probe (BATCH_PROBE=4, DeepSeek-V4.1-Flash,
+TP8, window 6, 16 slots):
+  uniform batch (same prompt): 4/4 rows match the single-request run
+    (r0-r2 [8,21,34,47], r3 [8,21])
+  mixed batch (plen 256/208/160/112): 4/4 match, first_diff=-1
+    (was 1/4 before this change)
+  against the reference greedy run: got [8,21,34] is a true prefix
+
+The BATCH_PROBE harness in decode_worker.py is how the above is checked;
+it is env-gated and off by default.
+```
+
+---
+
+```text
+probe: report step time per batch width
+
+The probe proved the batched rounds correct but never said what they
+cost, so every speed claim so far came from a separate harness that ran
+a different path than the server. BP_TIME walks widths 1..N on real
+slots with real prefills, warms four rounds so no capture or page fault
+lands inside the window, and times 32 rounds of the same step_gb the
+served path calls.
+
+DeepSeek-V4.1-Flash, TP8, window 6, 16 slots, 384-token prompts:
+  b=1  17.14 ms/round  17.14 ms/row
+  b=2  21.93 ms/round  10.96 ms/row
+  b=3  27.02 ms/round   9.01 ms/row
+  b=4  31.01 ms/round   7.75 ms/row
+
+A row costs 4.6 ms more per round, not another 17: four requests take
+1.81x the time of one, so 2.21x the throughput. Accepted tokens vary
+with the draft, so tok/s swings between runs and the round time is the
+comparable number.
+```
+
+---
+
+```text
+decode: capture every batch width before serving
+
+A capture taken mid-flight stalls whatever is aboard.  Warmup took only
+b=1, so the first concurrent burst paid for the b=2,3,4 captures and
+finished slower than running the same four requests one at a time.  The
+warmup now opens max_batch rows and takes b=1..max_batch there, and a
+width missing at replay is a setup error rather than a capture.  Naming
+the batch stopped allocating too: the slot map has a pinned mirror that
+is refilled in place.
+
+  e2e, four concurrent requests, cold start (no warm traffic first):
+    before  serial 1.89s  concurrent 3.24s  0.58x
+    after   serial 1.86s  concurrent 1.62s  1.15x
+  capture_b count 28 before traffic, 28 after: none taken while serving,
+  and ENGINE_READY is logged after the last of them.
+  Semantics unchanged: 3/4 replies byte-identical to the serial run, the
+  4th diverges deterministically (batch width reorders the reduction).
+```
+
+---
+
+```text
+decode: retire the per-round temporaries from the commit path
+
+A served round is meant to be arithmetic over space already taken, not
+a request for new space. Three sites still minted tensors every round:
+the ring row index (arange %% ring) in decode_layer, the fp32 staging of
+residual writes in SourcePast, and the accepted-row gather in the draft
+handoff. Each now refills a buffer taken once, with host mirrors pinned
+so the index space is refilled rather than rebuilt.
+
+Measured with the same probe (BP_TIME=1, 32 rounds per width, 8xA100):
+  allocs/round  b=1 17->3   b=2 30->4   b=3 43->5   b=4 56->6
+  round_ms      b=1 17.07->16.96   b=2 21.87->21.67
+                b=3 27.06->26.90   b=4 30.90->30.71
+  segments and reserved delta: 0 before and after (pool already static)
+
+Service check (4 prompts, greedy, serial then 4-way concurrent):
+  same=3/4, serial 1.86s, concurrent wall 1.59s, speedup 1.17x
+  -- byte-identical to the 449fab8 baseline, including the one prompt
+  that diverges under batching, so this carries no semantic change.
+```
+
+---
+
+```text
+decode: pack the verify window into the buffer the graph replays on
+
+The window of a served round was packed by concatenating each row and
+stacking the result, handing the graph a fresh [B, W] block every round
+only to copy it into the one the capture baked in.  Write the rows into
+that buffer instead; the capture path keeps a plain pack for the block
+it takes once at startup.
+
+With this the round no longer scales its allocations with the batch:
+  allocs/round  b=1 3->1  b=2 4->1  b=3 5->1  b=4 6->1
+  (the whole knife series: 17/30/43/56 -> 1/1/1/1, width-independent)
+  round_ms      b=1 17.00  b=2 21.70  b=3 26.99  b=4 30.78
+                (unchanged within noise from 16.96/21.67/26.90/30.71)
+  segments and reserved delta: 0
+
+Service check (4 prompts, greedy, serial then 4-way concurrent):
+  same=3/4, serial 1.87s, concurrent wall 1.63s, speedup 1.15x
+  -- identical to the 449fab8 baseline, same single prompt diverging
+  under batching, so no semantic change.
+```
+
+---
+
+```text
+decode: give the cursor mirror the cursor's own dtype
+
+The last allocation a served round still made was 32 bytes: the pinned
+mirror of the draft start was typed long, the cursor it copies into is
+typed off ``past.pos_dev``, and a copy across dtypes stages the cast on
+the device.  Typing the mirror off the cursor closes it.
+
+Measured (BP_TIME=1, 32 rounds/width, 8xA100):
+  allocs/round  b=1..4  1 -> 0   (snapshot: 0 alloc events in 3 rounds)
+  round_ms      b=1 16.85  b=2 21.52  b=3 26.88  b=4 30.64
+                (449fab8 baseline 17.07 / 21.87 / 27.06 / 30.90)
+  segments delta 0, reserved delta 0 MiB
+A served decode round now takes no device memory at all: every space it
+writes was taken before the engine reported ready.
+Service check unchanged from baseline: same=3/4 (the one prompt that
+diverges under batching does so on 449fab8 too), speedup 1.16x.
+```
+
+---
+
+```text
+engram: make the row gate a protocol, not a shape coincidence
+
+The gate and its row buffer were built on the first served round and sized
+by guessing the workspace's capacity through a bare try/except.  Worse, the
+captured body decided whether staging had happened by comparing row counts:
+a staging that was skipped, or one meant for a different batch width, would
+silently be replaced by a fresh gather inside the graph.
+
+Now the engine tells the block its capacity at build time (row_cap =
+window * batch for decode, length for prefill), the gate and the row store
+are cut once in __init__, and the body's rule is the real one: while
+capturing, the staged rows are the only rows, and a mismatch raises instead
+of gathering.  Outside capture (seed/warmup) the block gathers, as eager
+always did.  decode.py no longer reaches through getattr for a private
+gate; the block offers release_gate().
+
+Caught by the new assertion: the eager seed step was consuming staged rows
+by row-count luck.
+
+Measured (BATCH_PROBE, 32 rounds, 8x A100):
+  b=1 16.89ms  b=2 21.65ms  b=3 27.02ms  b=4 30.78ms
+  baseline ef7c396: 16.85 / 21.52 / 26.88 / 30.64
+  allocs/round = 0 at every width, reserved_delta = 0 MiB
+Service: /health ok, 4/4 prompts answered, same=3/4 vs serial (the known
+batching-inherent divergence, unchanged by this cut).
+```
+
+---
+
+```text
+decode worker: one deployment, no knobs
+
+The worker used to take seven command line flags whose defaults described
+a machine nobody runs (one slot, 12K chunks, 1M sequences) while the real
+deployment passed six slots and 2048 token chunks on every launch.  A
+specialised engine has exactly one configuration, so the numbers now live
+as constants at the top of the file where they can be read and trusted.
+
+The 450 line speculative probe moves to tests/batch_probe.py, which is
+where a debug harness belongs; it enters through the new bootstrap() so it
+measures the same engine the server drives.  The profiler and tracing
+scaffolds, and the LJQ_COLD_*/V41_CPUBIND switches, are gone: 1076 lines
+become 602.
+
+Verified after the cut: batch probe reports matches_single=True for all
+four rows including one that leaves mid-run, round_ms 16.99/21.80/26.98/
+30.82 for b=1..4 against the 16.89/21.65/27.02/30.78 baseline, zero
+allocations in every width; service check answers 4/4 with same=3/4.
+```
+
+---
+
+```text
+model and ops: no switches left
+
+Every runtime toggle in the model and kernel layers was a leftover from
+an experiment that already ended, and the losing side was never taken.
+BATCH_SPEC printed capture chatter, ENGRAM_HASH_CHECK re-ran the torch
+hash next to the numpy one, LJQINFER_FAST_AR and V41_BF16_DENSE guarded
+paths we always take, DSV4_OPS_DIR and ENGRAM_EXT_BUILD let the build
+wander. They are now plain code: the fast all-reduce and the dense bf16
+cache are simply what the engine does, and the two paths are constants.
+model/run_prefill.py had no caller left and is deleted.
+
+Probe after the cut: agreement 4/4 with the batched rows matching the
+single-row reference, round_ms 16.84/21.63/26.89/30.68 for b=1..4, zero
+allocations; service check answers 4/4, same=3/4, 1.17x.
+```
+
+---
+
+```text
+constants: one MAX_BATCH, 1M reach, and the pool as the real limit
+
+SLOTS and MAX_BATCH were two numbers for one fact -- how many rows can be
+aboard -- and they disagreed (6 vs 4), so two KV slots were allocated that
+drive() could never fill.  MAX_BATCH is now the only knob; change it and the
+slots, the widest captured graph and the header all follow.
+
+MAX_SEQ now says what the model can address (1M).  What a row can actually
+grow to is decided by the paged KV budget, so PageTable derives row_cap from
+the pool it was given, and every admission check, rope table and index score
+width reads row_cap instead of max_seq.  Sizing the engine is now one line:
+POOL_TOKENS.
+
+paging.read_capacity() (and its cached arange) went with it: a max_seq-wide
+gather nobody has called since the paged scorer landed.
+```
+
+---
+
+```text
+pool: size the KV budget for the reach the model claims
+
+POOL_TOKENS was 32768 -- a number carried over from when the pool was a
+scratch buffer, not a budget.  It made row_cap 8192 and turned MAX_SEQ = 1M
+into a lie: a 41k-token prompt could not board.
+
+The pool is cheap.  Only four layers own shared sources (ratios 2,2,2,1 over
+KV_DIM 512 + INDEX_DIM 128 in bf16), so a pool token costs 3200 bytes, not
+the per-layer fortune a dense cache would want.  4M pool tokens is 12.8 GB
+per rank, and with MAX_BATCH 4 every row can reach the full 1M the model
+addresses.  Measured: 53.5 -> 69.4 GB of 80, step time b=1 17.17 -> 17.89 ms
+(+4%) for a 128x longer row, b=4 54.85 -> 56.45 ms.  A 41020-token
+needle-in-haystack prompt prefills in 6.83 s and answers correctly.
+
+The only number to turn is POOL_TOKENS: it is the budget, and row_cap is
+what the pool grants each row.
+```
+
+---
+
+```text
+strategy: board in batches or queue, and log the prefill stall
+
+A request used to board the moment it arrived, and boarding costs a
+prefill that freezes every row already riding.  Four requests arriving
+together therefore made the first one crawl: eleven rounds that should
+have cost 32.5ms each took 78.8ms, the difference being three prefills
+it sat through.
+
+The door now opens for an empty bus (after a 0.10s grace so requests
+that arrive together board together) and after that only once every 128
+rounds.  Between openings a request queues instead of barging in.
+
+`decode_ms_per_step` was the wall clock a row saw, stalls included, but
+its name promised engine cost, so it is now `wall_ms_per_step` and
+`prefill_stall_seconds` says how much of it was spent waiting on other
+people's prefills.  `model_step_host_ms` remains the engine's own cost.
+```
+
+---
+
+```text
+server: let a streaming client read the engine stats too
+
+The blocking path has always answered with an "ljqinfer" block, so a
+caller could see its own step time; the streaming path collected the very
+same numbers into StreamAdapter.stats and then dropped them on the floor.
+A client that streams could only time its own wall clock, which is why the
+audit's concurrency rows printed a step time of 0.00ms while the engine
+was plainly working.
+
+The final chunk now carries the stats, and the audit reads the honest
+model step plus the seconds a row sat frozen behind someone else's
+prefill, instead of the blended wall-clock step.
+
+  n=1  step=17.49ms stall=0.00s
+  n=4  step=32.57ms stall=0.25s   (all arriving together)
+  n=4  step=19.95ms stall=0.04s   (0.30s apart)
+```
+
+---
+
+```text
+decode: deterministic candidate emit
+
+Both candidate kernels grabbed their output slots with tl.atomic_add, so the
+winner of the race decided the row order -- and, for candidates tied with the
+threshold, which ones got in at all. The consumer sums those rows in fp32, so
+the scheduler was visible in the logits: the same prompt answered two different
+ways, 7 times out of 10.
+
+Each program now counts what it will emit, the counts get an exclusive prefix
+sum, and emit reads its own offset. Order and membership follow the candidate
+index, nothing else.
+
+Same prompt ten times: 10/10 identical (was 2 answers). MTP acceptance
+1.739/step (was 0.909), 23 decode steps (was 33). Batches of 1..4 are now
+self-consistent.
+```
+
+---
+
+```text
+spec: seed only the rows the round accepted
+```
+
+---
+
+```text
+mtp: one batched contract for the drafter
+
+The drafter took slot as either an int or a tensor and branched four ways
+inside _freqs/seed/__call__, so a single request walked different code than
+a batch of four. Slot is now always a [B] device vector and the rows are
+always block-major [B*t], with _rows() naming that contract once.
+
+The eager step()/generate() pair that only a probe called is gone, so the
+engine's open()+step_gb() path is the only path left; batch_probe's width-1
+reference now goes through step_gb too.
+
+Verified against the previous HEAD by stashing and restarting the worker:
+width 1 gives the identical 297-char text at mtp 1.500, width 4 the
+identical 1.129. Structure only, no behaviour moved.
+```
+
+---
+
+```text
+past: a released slot hands its window back empty
+
+A slot returning to the pool cleared its sources but left the sliding
+window ring untouched, so the next request to borrow that slot drafted
+against whatever the last one had left there.  Served serially, one
+unchanged prompt answered two different ways on consecutive requests and
+acceptance sat near 2.1; with the ring cleared the same prompt answers
+the same way every time and acceptance rises to 3.2.
+```
+
+---
+
+```text
+tests: probes that tell a real divergence from floating-point weather
+
+Six serial requests for one unchanged prompt used to answer two different
+ways; the probes here are what caught it and what settles the rest.
+determinism_probe repeats a single request eight times and then runs four
+abreast, judging each row by whether its sequence appears among the solo
+answers.  width_probe sweeps prompt length against batch width, and
+ulp_probe measures how far the first step's state moves when the company
+changes: about one bfloat16 step at the tensor's own scale.
+```
+
+---
+
+```text
+api: report max_tokens stop reason and real prefill token count
+
+The service only mapped the engine reason 'max_tokens', but the engine
+calls a budget-exhausted lane 'length', so every truncated Anthropic reply
+claimed stop_reason=end_turn and told clients the answer was complete.
+
+The prefill metrics also published input_tokens twice: prefill_tokens
+ignored the cache hit, so a 3947-token prompt that only computed 144
+tokens still reported 3947 and broke cache_hit + prefill == input.
+
+tests/api_suite.py drives both endpoints like a product API (auth, stream,
+tools, thinking, concurrency, cache) and tests/log_report.py aggregates the
+per-request metrics the service already logs.
+```
+
+---
+
+```text
+metrics: publish the prefill phase clock the worker already measures
+
+open_row times three phases, but it named them cold_s/chunks_s/finish_s
+while the service only copies fields from its published metric contract,
+so the whole breakdown was measured and then dropped on the floor: a
+0.6s prefill looked like one opaque number.  Rename the marks to the
+contract names and add the one that was missing, so a request now says
+how much went to restoring the cached prefix, to the eager forward, and
+to finishing.
+
+tests/prefill_probe.py walks tiny/mid/long and cold/warm prompts so the
+phase split can be read off in one run.
+```
+
+---
+
+```text
+prefill: stop recapturing the SWA graph on every request
+
+The SWA workspace kept exactly one captured graph, keyed on the chunk
+length.  Prompt lengths differ from one request to the next, so the key
+missed almost every time: reset, three warmup runs and a fresh capture,
+0.145s of it, in front of every prefill.  A chunk is a big eager bundle
+already -- the launches a graph saves here are worth far less than the
+capture it demands, so the workspace now just runs.
+
+146-token prefill 0.28s -> 0.13s; a 2888-token warm request drops from
+0.62s to 0.32s and its first token from 0.72s to 0.42s (the cold-KV
+replay shares the same path, so it halves too).  Decode step time and
+all 27 passing API cases are unchanged, output identical.
+```
+
+---
+
+```text
+tests: drop the stop_sequences case -- the engine never promised it
+
+Nothing in the design asks for caller-supplied stop strings, so a test
+demanding them was testing someone else's engine.  The response still
+carries a null stop_sequence field because the Anthropic shape expects
+one, and null is the honest answer.  27/27 now.
+```
+
+---
+
+```text
+moe decode: specialise the gate/up kernel on nvec so ptxas unrolls the k loop
+
+K is 5120 for every production shape, so template the kernel on the vector
+count and pass the literal in: the five k-steps unroll and every uint4 load
+issues up front instead of one per serialised iteration.  Bit-exact (same
+FMA order), 88.8->85.7us at T=6 and 312.8->306.3us at T=24 on the new
+single-card bench tests/mb_moe4.py.
+```
+
+---
+
+```text
+mb_moe4: take variant names from argv so the bench runs standalone
+```
+
+---
+
+```text
+decode: publish a round's residual rows in one batched write
+
+commit() walked the slots one at a time, so each extra request aboard
+bought four more launches per layer.  The rows a round touches are now
+addressed by two index vectors -- destinations into the flattened ring,
+sources into the packed verify window -- built by scalar stores into a
+pinned buffer and carried across in a single copy.  SourcePast grows
+write_res_batch() to consume them; when the sources already form one
+unbroken run (any solo request, and batches that happen to line up) the
+gather collapses to a narrow, so the single-request path stays as short
+as it was before.
+
+Launch count per layer is now flat in batch width instead of linear.
+Host+launch cost of a four-layer publish, measured standalone:
+  B=1  336us -> 317us
+  B=2  637us -> 415us
+  B=4 1266us -> 416us
+
+Engine step time, fixed-width batches:
+  b1 17.70  b2 22.37  b3 27.75  b4 31.74 ms
+against a layout-matched baseline of 17.66 / 22.54 / 28.15 / 32.45.
+(Plain HEAD measures 17.48 / 22.42 / 28.08 / 32.29; the ~0.2ms gap at
+b1 is allocator layout drift -- two never-touched tensors of the same
+size reproduce it exactly on unmodified code.)
+
+api_suite 27/27.
+```
+
+---
+
+```text
+packed-FP8 tensor-core dense GEMM for decode
+
+Decode projections read the packed FP8 weights directly through an
+mma.m16n8k16 kernel instead of materialising a BF16 copy first: half the
+weight bytes at the same tensor-core throughput, which is what the earlier
+CUDA-core GEMV attempt (fp8_dense_gemv) could not deliver.
+
+The reduction order depends on the shape alone, never on how many rows
+board the step, so a row is bit-identical from M=1 to M=32; measured on
+four decode shapes. Batch width is no longer a source of dense drift, and
+speculative acceptance rises accordingly (b=1 mtp 0.99 -> 1.45,
+92.7 -> 112.7 tok/s; b=4 206 -> 217 tok/s; step 17.5 -> 17.0ms at b=1).
+Weights whose per-rank K is not a multiple of 128 keep the BF16 path.
+Freed 3.8 GiB per rank. tests/api_suite 27/27.
+```
+
+---
+
+```text
+one kernel publishes a decode window into the pools
+```
+
+---
+
+```text
+moe: gather the routed rows instead of scattering them
+
+Prefill did not repeat itself: the same prompt, run alone twice, could
+come back as two different hidden states, and a row batched with others
+could disagree with the same row run solo.  The split was already there
+before the first decode step, so it was not batching or cache.
+
+scatter_add gave each routed row its own atomicAdd into the token's
+accumulator, so the topk contributions of one token landed in whatever
+order the hardware handed them over, and float addition is not
+associative.  Every expert is local under TP and every routed slot is
+kept, so the rows of a token can be found instead of waited for: build
+slot[token*topk+choice]=row, which is a conflict-free write, then have
+one thread per output element sum its topk rows in routing order.
+
+prefill repeated 24 times: 4 distinct results before, 1 after.  Same
+prompt solo 8 times: 2 before, 1 after, and all 4 rows of a b=4 batch
+now match their solo run.  Prefill wall time is unchanged (145.0/190.7/
+214.9 ms at len 11/512/1024 against 144.4/191.6/216.0 before); the reads
+are the same and the read-modify-writes are gone.
+```
+
+---
+
+```text
+route: size the token block to the batch instead of looping over it
+
+_route_gemv already took a TP constexpr but its body hard-coded arange(0, 16)
+and a (16, BN) accumulator, so the parameter was dead and any batch wider than
+16 rows was served by launching the kernel several times.  At b=4 that is 24
+rows, i.e. two launches plus two slices per call, and nsys put the pair at
+1.18ms per step.
+
+Honour TP in the body and pad the token axis to max(16, next_pow2(rows)):
+16 stays the floor because that is the smallest M the MMA shape wants, and it
+keeps b=1 (6 rows) on exactly the code it ran before -- verified bit-exact.
+b=4 now takes one TP=32 launch: 248.6us -> 78.2us in the micro-bench, also
+bit-exact, and the engine step drops 31.13ms -> 30.42ms.  27/27 API cases pass.
+```
+
+---
+
+```text
+decode/index: drop the redundant live-prefix mask before the radix leaf
+
+sparse() materialised an [Q,N] bool mask over the whole index pool
+capacity (N = row_cap//ratio, ~1M rows at the 1M profile) via
+arange().expand() and then ran a full masked_fill(-inf) through it,
+purely to mark rows past (positions+1)//ratio.
+
+The radix leaf re-derives that same bound from (positions, ratio)
+itself -- the comment right below the masked_fill already said so.
+The mask survived as leftover from the era when this fed a full
+[Q,N] sort; with the leaf it is dead weight. prefix_mask is never
+supplied by any caller, so decode always took this branch and paid
+the mask + fill every index step, at a cost tied to pool capacity
+rather than to the live sequence length.
+
+nsys (1M pool, 61 layers, 44.9 steps): masked_fill 204x64.6us +
+68x137.2us, plus the mask materialisation at grid 8192/16384.
+
+A/B, fixed-width batches:
+  b=1 16.29 -> 16.14ms   b=2 21.26 -> 21.02ms
+  b=3 26.46 -> 25.85ms   b=4 30.60 -> 29.93ms  (split b=4 -2.9%)
+  throughput b=4 212.1 -> 216.1 tok/s
+MTP acceptance identical at every width (1.12/1.34/1.41/1.27),
+tests/api_suite.py 27/27 incl. determinism_repeat.
+```
+
+---
+
+```text
+decode/index: stop -inf filling the index score buffer at pool capacity
+
+scores() allocated a fresh [t, max_rows] fp32 tensor per layer per step and
+filled it with -inf, where max_rows is the index pool capacity (~1M rows on
+the 1M profile) rather than anything derived from the live sequence.  That
+fill is a capacity-sized write no consumer ever observes:
+
+  * topk_select_post_kernel clamps its scan to NL = (pos+1)/ratio and, as
+    its own comment states, skips the [NL, N) tail entirely -- both the
+    float4 body and the scalar remainder bound on NL, never N.
+  * cand_blocks._bkey only admits blocks below `newest`, whose row range
+    lies inside [0, lens); _score writes every row below that bound.
+
+So the tail carried -inf purely for the benefit of readers that clamp
+themselves.  Reuse a persistent per-(t, max_rows) buffer instead, which
+also pins the address across graph replays.
+
+ab.sh: b=1 16.14->15.95ms  b=2 21.02->20.67  b=3 25.85->25.55
+       b=4 29.93->29.32 (thr 216.1->219.1 tok/s), split b=4 29.55->29.10
+Combined with the preceding mask removal, versus the run before both:
+       b=1 -2.1%  b=2 -2.8%  b=3 -3.4%  b=4 -4.2%
+MTP accept rates unchanged across all seven cells (1.12/1.34/1.41/1.27/
+0.58/1.19/1.11); tests/api_suite.py 27/27 with determinism_repeat identical.
+```
+
+---
+
+```text
+api: one model name for both protocols
+
+The name was written out at six sites.  server.py held a constant and
+three .get("model_name", "...") fallbacks that each repeated the
+literal, and service.py carried a fourth copy as a default argument.
+Every one of them was a separate source of truth, so a rename had to
+land in six places and missing one stayed silent: service.py takes
+request["model"] verbatim and never validates it, so a stale name
+would keep answering.
+
+Both protocols now read MODEL_NAME from server/service.py.  The model
+answers to "ljqinfer-dsv41f" on the OpenAI and the Anthropic route
+alike, /v1/models and /health report that name, and api_suite is
+27/27.
+```
+
+---
+
+```text
+prefill: chunk at the engine's ceiling, not a fifth of it
+
+ModelExecution already accepts up to 12288 tokens per prefill chunk and
+defaults to exactly that.  The worker passed CHUNK = 2048 and overrode
+it, so every prompt was cut into six times as many pieces as the engine
+was willing to take.
+
+Each piece costs about 0.118s of setup that has nothing to do with its
+length -- a 24-token prompt pays it in full.  A 10686-token prefill was
+six pieces, so 0.71s of the 1.55s it took was setup repeated five times
+over.  Measured at the ceiling: 21212 tokens in 1.714s and 26012 in
+2.050s, both about 12.5k tok/s against 6.9k before, which is the rate
+the model layer computes at.
+
+The reported chunk count was also measuring the wrong thing.  It divided
+the whole prompt, cache hits included, so a request that prefilled 2613
+tokens reported seven chunks; it now divides what was actually computed.
+
+Host memory per rank is unchanged.  Device use goes from 65.0 to 71.9
+GiB of 80 for the wider workspace.  27/27 api_suite passes.
+```
+
+---
+
+```text
+cold: share one host arena across TP ranks
+
+MLA latents have no head dim to shard and wkv/wk are replicated, so all eight ranks were each holding a byte-identical copy of the same cold KV. Back the cache with one /dev/shm arena: the allocator is deterministic, so ranks agree on offsets without extra traffic, and each still issues its own restore DMA. Verified 8 procs -> 1.00x resident (was 8x). Budget 8->80GiB.
+```
+
+---
+
+```text
+cold: one host cache on rank 0, broadcast the hit over NVLink
+
+ColdCache goes back to being plain host memory that knows nothing about
+ranks or models. Only rank 0 builds one; it stages a hit into its own GPU
+and broadcasts the packet, so a restore crosses PCIe once instead of eight
+times and stores run D2H once instead of eight times. The shared-memory
+arena that existed only to stop eight ranks from each holding the same
+bytes is deleted with its module.
+
+Measured: restore is correct (followers own no cache, so a wrong broadcast
+would produce garbage; it does not). cache_load_seconds is unchanged at
+~0.133s -- it does not scale with hit size (539 vs 2741 tokens cost the
+same), so the remaining cost is per-layer fixed overhead, not bandwidth.
+```
+
+---
+
+```text
+metrics: surface cold-cache store time alongside load time
+```
+
+---
+
+```text
+cold: stage host copies out of a pooled page-locked arena
+
+Pinning per entry puts a cudaHostAlloc on every write, and that
+allocator costs more than the faster DMA returns: measured over 72
+chunks of 47 MiB it ran at 0.0202 against 0.0128 s per chunk, which is
+why the staging buffers were pageable.  An arena instead locks its
+pages once and hands out byte offsets, so every copy keeps the fast
+path while the allocator stays off it.  The copy can then issue
+asynchronously and the store settles it with one synchronize at
+commit, dropping the median write from 18.7 ms to 0.3 ms.
+
+The arena knows only bytes: no attention geometry, no rank, no model.
+```
+
+---
+
+```text
+cold: bill the prefill drain to prefill, not to the store
+
+prefill_chunk only queues its kernels, so the first read of the slot
+inside store_chunk blocked until they retired and the strategy charged
+that wait to cache_store_seconds: a 128k cold store read 2.4316s when
+the store itself costs 0.3033s.  The metric docstring already claimed
+the queue drains inside prefill_chunk; it no longer does.
+
+store_chunk now takes an optional on_drain callback and reports when
+the queue is empty, so the strategy can move its compute mark forward
+without synchronizing a stream it does not own.  Callers that do not
+measure pay no synchronize, so the eight existing call sites are
+unchanged.
+
+Measured over 41 live requests: prefill_seconds now equals compute +
+load + store + queue to a 4ms median residual.
+```
+
+---
+
+```text
+decode: report decode_tps, drop the second copy of the step clock
+
+engine_decode_seconds and wall_ms_per_step were the same measurement
+written twice: across 41 live requests output/engine_decode_seconds and
+output/(steps*wall_ms_per_step) agreed to 1.0000 on every row.  Neither
+of them was the number anyone actually reads, so every caller divided it
+back out by hand -- and tests/log_report.py already banded a decode_tps
+column that the engine never emitted.
+
+Emit decode_tps from the lane's own produced count and drop
+engine_decode_seconds.  remote_strategy forwards the new key;
+tests/api_audit rebuilds the decode seconds it needs from
+decode_steps * wall_ms_per_step, which is the same quantity it used
+before.  server/service.py already computed a service-side decode_tps
+and now has the engine-side value override it, which is the tighter
+of the two.
+
+Observed range on live traffic: 165-344 tok/s, set almost entirely by
+MTP acceptance (2.77-5.76 tokens/step) and nearly flat in context
+length -- 128k warm decodes at 218.9 tok/s against 236.8 at 4k.
+```
+
+---
+
+```text
+sampling: per-request temperature through the spec-decode window
+
+Greedy decoding made the model loop.  The verify window now draws with
+Gumbel-max at the request's temperature instead of taking the argmax, and
+the drafter proposes at the same temperature so acceptance stays a plain
+prefix match.
+
+The temperature rides the rank header (HEAD 3 -> 4, milli-units) so all
+eight ranks sample identically, and the kernels read it from a device
+tensor -- a captured graph would otherwise freeze whatever value capture
+happened to see.  Rows carry their own entry, so one batch can mix
+temperatures.  T == 0 still takes the argmax path, bit for bit.
+```
+
+---
+
+```text
+sampling: damp the tokens a row just said
+
+Thinking runs could lock onto a template and repeat it forever.  The
+top-1 logit there sits near certainty, so temperature alone never
+moved it.  Verify now subtracts a fixed weight from the logits of the
+tokens already in the row's recent tail, which is enough to break the
+loop.
+
+The window rides on the state's committed tail, kept as long as the
+penalty needs rather than as long as the n-gram key needs.  Ids and
+weights reach the captured graph through mirrors, like the query rows
+and temperatures before them, so nothing new crosses the capture.
+
+LJQ_REP_PEN=0 restores the old path.  Acceptance drops to ~3.2 from
+~4.1 tokens per step, since the drafter still proposes unpenalised;
+step time is unchanged at ~16.1ms.
+```
+
+---
+
+```text
+sampling: let a token recur a few times for free
+
+Damping every token in the window taxed ordinary prose, where
+articles and punctuation recur constantly, and the drafter -- which
+proposes unpenalised -- lost guesses to the mismatch.  Only the
+count above a free allowance is charged now, so a run that is not
+repeating itself hands the graph an all-zero weight.
+
+On one prompt, twice each: 179/178 decode steps for 700 tokens
+against 211 with the damping off, at 16.3ms per step either way.
+LJQ_REP_MIN sets the allowance.
+```
+
+---
+
+```text
+sampling: state the damping figures as engine constants
+
+They arrived as environment lookups, which no other part of the
+engine uses to shape behaviour -- the model reads its figures from
+config or states them outright.  A knob nobody turns is still a
+branch every reader must consider, and one that can differ between
+two ranks of the same run.  The three figures now sit beside the
+code they govern, each with the reasoning that picked it.
+```
+
+---
+
+```text
+sampling: write each row's charge in one stroke
+
+The charge was written cell by cell across a row's window span,
+which repeats the same two values as many times as the span is
+wide, once per row, on every step.  The temperatures next door
+state a span in a single slice; the charge can say it the same way.
+```
+
+---
+
+```text
+feat: add native TP8 image input with bounded validation
+```

@@ -16,7 +16,7 @@
 | DSV4F-0731 · 8×A100 | **8,018** @12K；6,969 @160K | **28.531** @51K；33.2 @160K |
 | Qwen38-27B-DFlash2 · 4×A800 · BF16 | **5,696** @12K | **23.738**，Q8 |
 | Qwen38-27B-DFlash2 · 4×910B3 · W8A8 | **7,031** @12K；4,781 @262K | **28.276–28.301**，Q8 |
-| **DSV41F · 8×A100 · Coming soon** | **10,665** @36K | **15.875**（模型 host 步时，900-token生成测试） |
+| **DSV41F · 8×A100** | **10,665** @36K | **15.875**（模型 host 步时，900-token生成测试） |
 
 ### 输出吞吐与平均 accept
 
@@ -39,7 +39,9 @@
 | [DSV4F-0731](ljqinfer-dsv4f-0731-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 · sm80 | DeepSeek-V4-Flash-0731，**FP8 / FP4 混合权重** | MTP / DSpark |
 | [qwen38-27B-dflash2 · BF16](ljqinfer-qwen38-27B-dflash2-tp4-a800-bf16/) | 4×A800 PCIe · TP4 | Huihui Qwen3.8-27B abliterated，target **BF16** | DFlash2，Q8 verify |
 | [qwen38-27B-dflash2 · W8A8](ljqinfer-qwen38-27B-dflash2-tp4-910b3-w8a8/) | 4×Ascend 910B3 · TP4 | Qwen3.8-27B，target **W8A8** | DFlash2，Q8 verify |
+| [GLM53](ljqinfer-glm53-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 · sm80 | GLM-5.3，原始 FP8 模型 + routed MoE **G64 INT4** 缓存 | DFlash2，Q8 verify |
+| [DSV41F](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · EP8/TP8 · sm80 | DeepSeek-V4.1-Flash，**FP8 / FP4 混合权重**；原生图像输入 | DSpark |
 
-**[DSV41F · Coming soon](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/)** — DeepSeek-V4.1-Flash，8×A100 NVLink · TP8 · DSpark。[开发历史](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/GIT_HISTORY.md)
+GLM53 与 DSV41F 已收录 node09 正式源码快照。[GLM53 部署说明](ljqinfer-glm53-tp8-a100-nvlink-sm80/README.md) · [DSV41F 导入与旧仓依赖](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/IMPORT.md) · [DSV41F 图像能力](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/IMAGE_SUPPORT.md)。上方速度表保留原历史测试口径；本次源码导入未复测性能，GLM53 未增列缺乏统一口径的速度数字。
 
 各实例的 `GIT_HISTORY.md` 保留完整开发消息，包括优化思路、实验结果与速度记录。

@@ -1,0 +1,322 @@
+#include <torch/extension.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDACachingAllocator.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <cuda_runtime.h>
+#include <vector>
+#include <limits>
+#include <mutex>
+
+torch::Tensor q8_mmvq_forward_out(torch::Tensor x, torch::Tensor packed, int64_t K, torch::Tensor y);
+void q8_mmvq_dual_forward_out(torch::Tensor x, torch::Tensor p0, torch::Tensor p1, int64_t K, torch::Tensor y0, torch::Tensor y1);
+void q8_mmvq_grouped_forward_out(torch::Tensor x, torch::Tensor packed, int64_t K, torch::Tensor y);
+torch::Tensor q8_mmvq_rms_forward_out(torch::Tensor x, torch::Tensor norm_w, torch::Tensor packed, int64_t K, torch::Tensor y, double eps);
+torch::Tensor rms_norm_half_out(torch::Tensor x, torch::Tensor w, torch::Tensor y);
+torch::Tensor rope_half_out(torch::Tensor x, torch::Tensor positions, torch::Tensor y);
+torch::Tensor rope_half_strided_out(torch::Tensor x, torch::Tensor positions, torch::Tensor y);
+torch::Tensor kv_post_cache_fused_out(torch::Tensor kv, torch::Tensor w, torch::Tensor positions, torch::Tensor pool, torch::Tensor page_table);
+// DECODE-ONLY production primitive (T=1..4, including batched decode).  Do not
+// route model prefill through flash_mla_sm80*: prefill must use tc_mla for an
+// identity page table or the true paged_prefill_mla kernel otherwise.
+torch::Tensor flash_mla_sm80_out_k0(torch::Tensor q_latent, torch::Tensor q_rope, torch::Tensor pool, torch::Tensor page_table, torch::Tensor k0, torch::Tensor out);
+
+struct AttnDecodeWs {
+  // Capacity for decode multi-query (MTP draft). Actual T uses narrow views.
+  static constexpr int64_t Tmax = 4;
+  torch::Tensor xn, qa, qb, q_nope, q_rope, q_latent, kv, out_latent, heads, partial;
+  bool ready=false; int64_t dev=-1;
+};
+
+static AttnDecodeWs& attn_ws_for(const torch::Tensor& x){
+  static AttnDecodeWs W[8]; int d=x.device().index(); TORCH_CHECK(d>=0 && d<8); auto& w=W[d];
+  if(!w.ready || w.dev!=d){
+    auto o=x.options();
+    const int64_t TM=AttnDecodeWs::Tmax;
+    w.xn=torch::empty({TM,6144},o); w.qa=torch::empty({TM,2048},o); w.qb=torch::empty({TM,8,256},o);
+    w.q_nope=torch::empty({TM,8,192},o); w.q_rope=torch::empty({TM,8,64},o); w.q_latent=torch::empty({TM,8,512},o);
+    w.kv=torch::empty({TM,576},o); w.out_latent=torch::empty({TM,8,512},o); w.heads=torch::empty({TM,8,256},o);
+    w.partial=torch::empty({TM,6144},o); w.ready=true; w.dev=d;
+  } return w;
+}
+
+// Graph-safe T=1 path: K0 is int32 device scalar; writes cache via index_copy; MLA uses full storage.
+
+// Unified production attention module: decode + prefill orchestration.
+
+#include <torch/extension.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <cuda_runtime.h>
+#include <vector>
+#include <limits>
+#include <mutex>
+#include <unordered_map>
+#include <string>
+#include <algorithm>
+#include <thread>
+#include <future>
+
+torch::Tensor q8_cublas_forward_cuda(torch::Tensor x, torch::Tensor packed, int64_t K);
+torch::Tensor q8_cublas_forward_grouped_cuda(torch::Tensor x, torch::Tensor packed, int64_t K);
+void q8_cublas_clear_weight_cache();
+torch::Tensor flash_mla_sm80(torch::Tensor q_latent, torch::Tensor q_rope, torch::Tensor cache, int64_t q_start);
+void paged_kv_scatter_cuda(torch::Tensor pool, torch::Tensor table, int64_t logical_start, torch::Tensor src);
+torch::Tensor paged_prefill_mla(torch::Tensor q_latent, torch::Tensor q_rope, torch::Tensor pool, torch::Tensor page_table, int64_t q_start);
+
+static torch::Tensor rms(torch::Tensor x, torch::Tensor w){
+  auto xf=x.to(torch::kFloat32);
+  return (xf*torch::rsqrt(xf.square().mean(-1,true)+1e-5)*w.to(torch::kFloat32)).to(x.scalar_type());
+}
+static torch::Tensor rope(torch::Tensor x,torch::Tensor p){
+  auto opt=x.options().dtype(torch::kFloat32);
+  auto pair=torch::arange(32,opt);
+  auto th=p.to(torch::kFloat32).unsqueeze(1)*torch::pow(8000000.0,-2.0*pair.unsqueeze(0)/64.0);
+  auto cs=th.cos().unsqueeze(1),sn=th.sin().unsqueeze(1);
+  auto z=x.to(torch::kFloat32).reshape({x.size(0),x.size(1),32,2});
+  auto e=z.select(-1,0),o=z.select(-1,1);
+  return torch::stack({e*cs-o*sn,e*sn+o*cs},-1).flatten(-2).to(x.scalar_type());
+}
+
+// Small square causal mask for present tokens only: key_local > query_local
+static torch::Tensor causal_mask_qq(const torch::Device& dev, int64_t Q){
+  static std::mutex mu; static std::unordered_map<std::string,torch::Tensor> masks;
+  std::string key=std::to_string(dev.index())+":qq:"+std::to_string(Q);
+  { std::lock_guard<std::mutex> g(mu); auto it=masks.find(key); if(it!=masks.end()) return it->second; }
+  auto m=torch::ones({Q,Q}, torch::TensorOptions().dtype(torch::kBool).device(dev)).triu(1);
+  { std::lock_guard<std::mutex> g(mu); masks.emplace(key,m); }
+  return m;
+}
+
+// Fast TC MLA for one causal query block. cache contains exactly the old
+// prefix plus keys through this block, so only the final QxQ slice is masked.
+static torch::Tensor tc_mla_block(torch::Tensor ql,torch::Tensor qr,torch::Tensor cache,int64_t block_start){
+  const int64_t Q=ql.size(0), K=cache.size(0);
+  TORCH_CHECK(block_start>=0 && block_start+Q==K, "invalid causal block range");
+  auto latent=cache.slice(-1,0,512);
+  auto q=torch::cat({ql.transpose(0,1),qr.transpose(0,1)},-1);
+  q.mul_(0.0625);
+  auto score=torch::matmul(q,cache.transpose(0,1)); // [H,Q,K]
+  score.slice(/*dim=*/2,block_start,K).masked_fill_(
+      causal_mask_qq(score.device(),Q).unsqueeze(0),
+      -std::numeric_limits<float>::infinity());
+  at::softmax_out(score,score,-1);
+  return torch::matmul(score,latent).transpose(0,1).contiguous();
+}
+
+// Keep one request and one model-layer call, but bound Attention's quadratic
+// workspace. Block b sees the full old prefix and all keys through b, exactly
+// matching the original causal QxK operation. Small prefill remains unchanged.
+static torch::Tensor tc_mla(torch::Tensor ql,torch::Tensor qr,torch::Tensor cache,int64_t q_start){
+  const int64_t Q=ql.size(0), K=cache.size(0);
+  TORCH_CHECK(q_start>=0 && q_start+Q==K, "invalid prefill range");
+  constexpr int64_t BLOCK_Q=2048;
+  if(Q<=BLOCK_Q) return tc_mla_block(ql,qr,cache,q_start);
+  std::vector<torch::Tensor> out;
+  out.reserve((Q+BLOCK_Q-1)/BLOCK_Q);
+  for(int64_t q0=0;q0<Q;q0+=BLOCK_Q){
+    const int64_t n=std::min<int64_t>(BLOCK_Q,Q-q0);
+    out.push_back(tc_mla_block(
+        ql.narrow(0,q0,n),qr.narrow(0,q0,n),
+        cache.narrow(0,0,q_start+q0+n),q_start+q0));
+  }
+  return torch::cat(out,0);
+}
+
+// LEGACY CONTIGUOUS ABI / BENCHMARK PATH ONLY; this is not model prefill.
+// Do not call append_mla or forward_rank_cached*_tc from the production prefill
+// path.  Their flash_mla_sm80 branch is retained only for old direct ABI tests.
+// Production prefill is exclusively forward_rank_paged_inplace_tc below: it
+// dispatches identity pages to tc_mla and non-identity pages to paged_prefill_mla.
+// flash_mla_sm80 remains production code only for decode T=1..4.
+// This legacy ABI has one source-controlled choice: flash MLA when compatible,
+// otherwise the type/shape fallback to tc_mla.  No environment selector.
+static torch::Tensor append_mla(torch::Tensor ql,torch::Tensor qr,torch::Tensor cache,int64_t q_start){
+  if(ql.scalar_type()==at::kHalf && qr.scalar_type()==at::kHalf
+     && cache.scalar_type()==at::kHalf && cache.is_contiguous()
+     && q_start>=0 && q_start<cache.size(0) && q_start+ql.size(0)<=cache.size(0)
+     && ql.size(1)<=64){
+    return flash_mla_sm80(ql.contiguous(),qr.contiguous(),cache,q_start);
+  }
+  return tc_mla(ql,qr,cache,q_start);
+}
+
+static std::vector<torch::Tensor> forward_rank_impl(torch::Tensor x,torch::Tensor positions,torch::Tensor attn_norm,torch::Tensor q_a,torch::Tensor q_a_norm,torch::Tensor q_b,torch::Tensor kv_a,torch::Tensor kv_a_norm,torch::Tensor k_b,torch::Tensor v_b,torch::Tensor attn_out,bool tc){
+  TORCH_CHECK(x.is_cuda()&&positions.is_cuda(),"x/positions must be CUDA");c10::cuda::CUDAGuard guard(x.device());const int64_t T=x.size(0);
+  auto xn=rms(x,attn_norm);auto qa=q8_cublas_forward_cuda(xn.contiguous(),q_a,6144);qa=rms(qa,q_a_norm);
+  auto qb=q8_cublas_forward_cuda(qa.contiguous(),q_b,2048).view({T,8,256});auto q_nope=qb.slice(-1,0,192);auto q_rope=rope(qb.slice(-1,192,256),positions);auto q_latent=q8_cublas_forward_grouped_cuda(q_nope.contiguous(),k_b,192);
+  auto kv=q8_cublas_forward_cuda(xn.contiguous(),kv_a,6144);auto latent=rms(kv.slice(-1,0,512),kv_a_norm);auto k_rope=rope(kv.slice(-1,512,576).unsqueeze(1),positions).select(1,0);auto cache=torch::cat({latent,k_rope},-1);
+  auto out_latent=tc?tc_mla(q_latent.contiguous(),q_rope.contiguous(),cache.contiguous(),0):flash_mla_sm80(q_latent.contiguous(),q_rope.contiguous(),cache.contiguous(),0);
+  auto heads=q8_cublas_forward_grouped_cuda(out_latent.contiguous(),v_b,512);auto partial=q8_cublas_forward_cuda(heads.reshape({T,-1}).contiguous(),attn_out,2048);return {cache,partial};
+}
+#define ARGS torch::Tensor x,torch::Tensor positions,torch::Tensor attn_norm,torch::Tensor q_a,torch::Tensor q_a_norm,torch::Tensor q_b,torch::Tensor kv_a,torch::Tensor kv_a_norm,torch::Tensor k_b,torch::Tensor v_b,torch::Tensor attn_out
+
+// First paged ABI: the physical owner is [page, page_size, 576].  During the
+// identity phase page_table is created once as [0,1,...], so flattening the pool
+// is exactly the former contiguous cache with no gather/copy.  Keeping this ABI
+// separate makes the current limitation explicit; shuffled-page addressing will
+// replace only this adapter, not the model/cache ownership contract.
+
+// Identity-page fast path.  When page_table is exactly 0..n-1 the logical
+// prefix maps 1:1 onto the physical pool, so pool.view({-1,576}) IS the
+// contiguous cache tc_mla wants -- no gather, no copy.  Measured at H=8:
+// tc_mla beats paged_prefill_mla by 1.38-1.47x on 32k-64k prefixes.
+// It is not free: tc_mla materializes score [H,BLOCK_Q,K] in fp32, so take it
+// only when that workspace comfortably fits.  Falling back to paged is always
+// safe, so every uncertain case rejects.
+// NOTE: never route this through append_mla -- its default flash_mla_sm80 path
+// measured 12.7x SLOWER here and allocates O(Q*K) (24GiB at 32k+32k).
+static bool paged_tc_fastpath_ok(const torch::Tensor& page_table,int64_t K0,int64_t T,int64_t H){
+  // Fresh identity prefill benefits from tc_mla. Append uses paged_prefill_mla:
+  // its causal block skip wins end-to-end even though a bare tc_mla call is faster.
+  if(T<=0 || K0>0) return false;
+  const int64_t Ktot=K0+T;
+  const int64_t block=std::min<int64_t>(T,2048);
+  const size_t need=(size_t)H*(size_t)block*(size_t)Ktot*4u;
+  size_t freeB=0,totalB=0;
+  if(cudaMemGetInfo(&freeB,&totalB)!=cudaSuccess) return false;
+  // torch's cached-but-unallocated blocks are reusable, count them as free.
+  {
+    auto st=c10::cuda::CUDACachingAllocator::getDeviceStats(page_table.device().index());
+    const size_t idx=static_cast<size_t>(c10::CachingDeviceAllocator::StatType::AGGREGATE);
+    const int64_t slack=st.reserved_bytes[idx].current-st.allocated_bytes[idx].current;
+    if(slack>0) freeB+=(size_t)slack;
+  }
+  // 2x for the transient copies around the score tensor, plus a hard reserve.
+  const bool mem_ok = !(need*2u+(size_t)768*1024u*1024u > freeB);
+  if(!mem_ok) return false;
+  auto host=page_table.to(torch::kCPU);
+  const int64_t* p=host.data_ptr<int64_t>();
+  for(int64_t i=0;i<host.numel();++i) if(p[i]!=i) return false;
+  return true;
+}
+
+// General single-sequence paged prefill. page_table[logical_page] gives the
+// physical page in cache_pool, and new KV is scattered directly to those pages.
+// Fresh identity layout may view the pool directly for tc_mla. Append and every
+// non-identity layout are consumed in place by paged_prefill_mla. There is no
+// gather-to-flash fallback. Never route prefill through flash_mla_sm80*.
+// Preserve this invariant for both single-sequence and existing batched prefill.
+std::vector<torch::Tensor> forward_rank_paged_inplace_tc(torch::Tensor x,torch::Tensor positions,torch::Tensor cache_pool,torch::Tensor page_table,int64_t K0,torch::Tensor attn_norm,torch::Tensor q_a,torch::Tensor q_a_norm,torch::Tensor q_b,torch::Tensor kv_a,torch::Tensor kv_a_norm,torch::Tensor k_b,torch::Tensor v_b,torch::Tensor attn_out){
+  TORCH_CHECK(x.is_cuda()&&positions.is_cuda()&&cache_pool.is_cuda()&&page_table.is_cuda(),"x/positions/pool/table must be CUDA");
+  TORCH_CHECK(cache_pool.dim()==3&&cache_pool.size(2)==576&&cache_pool.is_contiguous(),"cache pool must be contiguous [pages,page_size,576]");
+  TORCH_CHECK(cache_pool.scalar_type()==torch::kFloat16,"cache pool must be fp16");
+  TORCH_CHECK(page_table.dim()==1&&page_table.scalar_type()==torch::kInt64&&page_table.is_contiguous(),"page table must be contiguous CUDA int64 [logical_pages]");
+  TORCH_CHECK(page_table.device()==cache_pool.device()&&x.device()==cache_pool.device(),"x/pool/table device mismatch");
+  const int64_t T=x.size(0), capacity=page_table.size(0)*cache_pool.size(1);
+  TORCH_CHECK(K0>=0&&T>=0&&K0+T<=capacity,"invalid paged cache logical range");
+  c10::cuda::CUDAGuard guard(x.device());
+  auto xn=rms(x,attn_norm); auto qa=q8_cublas_forward_cuda(xn.contiguous(),q_a,6144); qa=rms(qa,q_a_norm);
+  auto qb=q8_cublas_forward_cuda(qa.contiguous(),q_b,2048).view({T,8,256}); auto q_nope=qb.slice(-1,0,192); auto q_rope=rope(qb.slice(-1,192,256),positions); auto q_latent=q8_cublas_forward_grouped_cuda(q_nope.contiguous(),k_b,192);
+  auto kv=q8_cublas_forward_cuda(xn.contiguous(),kv_a,6144); auto latent=rms(kv.slice(-1,0,512),kv_a_norm); auto k_rope=rope(kv.slice(-1,512,576).unsqueeze(1),positions).select(1,0); auto entry=torch::cat({latent,k_rope},-1).contiguous();
+  paged_kv_scatter_cuda(cache_pool,page_table,K0,entry);
+  torch::Tensor out_latent;
+  // A request-local table such as [0] is only identity within that request;
+  // flattening the complete owner pool is valid only for the full owner table.
+  if(page_table.size(0)==cache_pool.size(0) &&
+     paged_tc_fastpath_ok(page_table,K0,T,q_latent.size(1))){
+    auto flat=cache_pool.view({-1,576}).narrow(0,0,K0+T);   // zero-copy: identity pages
+    out_latent=tc_mla(q_latent.contiguous(),q_rope.contiguous(),flat,K0);
+  }else{
+    out_latent=paged_prefill_mla(q_latent.contiguous(),q_rope.contiguous(),cache_pool,page_table,K0);
+  }
+  auto heads=q8_cublas_forward_grouped_cuda(out_latent.contiguous(),v_b,512); auto partial=q8_cublas_forward_cuda(heads.reshape({T,-1}).contiguous(),attn_out,2048);
+  // This provider embeds a private q8_cublas cache; K.q8 cannot clear it.
+  q8_cublas_clear_weight_cache();
+  return {cache_pool,partial};
+}
+
+// Fixed-Q2 multi-sequence decode.  Expensive projections run once over [2B,D];
+// only the inherently ragged MLA prefix traversal remains per sequence.
+// page_tables[i] and K0s[i] define a disjoint logical sequence in cache_pool.
+
+// CUDA-graph-safe fixed-Q2 multi-sequence decode.  K0 lives on device, KV is
+// written from the dynamic positions tensor, and MLA writes into one captured
+// output allocation.  B<=2 follows the current T<=4 decode workspace contract.
+std::vector<torch::Tensor> forward_rank_paged_batch_q2_k0(
+    torch::Tensor x, torch::Tensor positions, torch::Tensor cache_pool,
+    std::vector<torch::Tensor> page_tables, std::vector<torch::Tensor> K0s,
+    torch::Tensor attn_norm, torch::Tensor q_a, torch::Tensor q_a_norm,
+    torch::Tensor q_b, torch::Tensor kv_a, torch::Tensor kv_a_norm,
+    torch::Tensor k_b, torch::Tensor v_b, torch::Tensor attn_out) {
+  TORCH_CHECK(x.is_cuda() && positions.is_cuda() && cache_pool.is_cuda(),
+              "x/positions/pool must be CUDA");
+  TORCH_CHECK(x.dim()==2 && x.size(1)==6144 && x.size(0)%2==0,
+              "batch Q2 x must be [2B,6144]");
+  const int64_t B=x.size(0)/2, T=x.size(0);
+  TORCH_CHECK(B>0 && B<=2 && (int64_t)page_tables.size()==B &&
+              (int64_t)K0s.size()==B, "graph batch Q2 supports B=1..2");
+  TORCH_CHECK(T<=AttnDecodeWs::Tmax && positions.numel()>=T,
+              "batch Q2 workspace/range");
+  TORCH_CHECK(cache_pool.dim()==3 && cache_pool.size(2)==576 && cache_pool.is_contiguous(),
+              "cache pool must be contiguous [pages,page_size,576]");
+  c10::cuda::CUDAGuard guard(x.device());
+  auto& w=attn_ws_for(x);
+  auto xn=w.xn.narrow(0,0,T); auto qa=w.qa.narrow(0,0,T);
+  auto qb=w.qb.narrow(0,0,T); auto q_latent=w.q_latent.narrow(0,0,T);
+  auto kv=w.kv.narrow(0,0,T); auto out_latent=w.out_latent.narrow(0,0,T);
+  auto heads=w.heads.narrow(0,0,T); auto partial=w.partial.narrow(0,0,T);
+  rms_norm_half_out(x,attn_norm,xn);
+  q8_mmvq_dual_forward_out(xn,q_a,kv_a,6144,qa,kv);
+  q8_mmvq_rms_forward_out(qa,q_a_norm,q_b,2048,qb.reshape({T,2048}),1e-5);
+  auto q_nope=qb.narrow(-1,0,192);
+  auto q_rope_src=qb.narrow(-1,192,64);
+  auto q_rope=w.q_rope.narrow(0,0,T);
+  rope_half_strided_out(q_rope_src,positions.narrow(0,0,T),q_rope);
+  q8_mmvq_grouped_forward_out(q_nope,k_b,192,q_latent);
+  for(int64_t i=0;i<B;++i){
+    auto table=page_tables[i]; auto k0=K0s[i];
+    TORCH_CHECK(table.is_cuda() && table.scalar_type()==torch::kInt64 &&
+                table.dim()==1 && table.is_contiguous(), "invalid page table");
+    TORCH_CHECK(k0.is_cuda() && k0.scalar_type()==torch::kInt32 &&
+                k0.numel()==1 && k0.is_contiguous(), "K0 must be CUDA int32[1]");
+    TORCH_CHECK(table.device()==cache_pool.device() && k0.device()==cache_pool.device(),
+                "page table/K0/pool device mismatch");
+    const int64_t start=2*i;
+    kv_post_cache_fused_out(kv.narrow(0,start,2),kv_a_norm,
+                            positions.narrow(0,start,2),cache_pool,table);
+    // Decode-only MLA: two decode/MTP queries for one sequence, not prefill.
+    // Future batched decode may keep this T<=4 device-K0 paged interface.
+    flash_mla_sm80_out_k0(q_latent.narrow(0,start,2),q_rope.narrow(0,start,2),
+                          cache_pool,table,k0,out_latent.narrow(0,start,2));
+  }
+  q8_mmvq_grouped_forward_out(out_latent,v_b,512,heads);
+  q8_mmvq_forward_out(heads.reshape({T,2048}),attn_out,2048,partial);
+  return {cache_pool,partial};
+}
+
+// Concurrent 8-rank decode entry: launch each rank on its own host thread (GIL already released by pybind).
+// Returns list[8] partials only; cache is written inplace into storages.
+
+
+// Stage timing for decode rank (CUDA events). Returns {cache, partial}.
+
+
+// --- A/B probes: expose the two append attention paths directly (test only) ---
+
+std::vector<torch::Tensor> forward_rank_paged_inplace_half(torch::Tensor x,torch::Tensor positions,torch::Tensor cache_pool,torch::Tensor page_table,int64_t K0,torch::Tensor attn_norm,torch::Tensor q_a,torch::Tensor q_a_norm,torch::Tensor q_b,torch::Tensor kv_a,torch::Tensor kv_a_norm,torch::Tensor k_b,torch::Tensor v_b,torch::Tensor attn_out){
+  TORCH_CHECK(x.is_cuda()&&positions.is_cuda()&&cache_pool.is_cuda()&&page_table.is_cuda(),"x/positions/pool/table must be CUDA");
+  TORCH_CHECK(cache_pool.dim()==3&&cache_pool.size(2)==576&&cache_pool.is_contiguous(),"cache pool must be contiguous [pages,page_size,576]");
+  TORCH_CHECK(cache_pool.scalar_type()==torch::kFloat16,"cache pool must be fp16");
+  TORCH_CHECK(page_table.dim()==1&&page_table.scalar_type()==torch::kInt64&&page_table.is_contiguous(),"page table must be contiguous CUDA int64 [logical_pages]");
+  TORCH_CHECK(page_table.device()==cache_pool.device()&&x.device()==cache_pool.device(),"x/pool/table device mismatch");
+  const int64_t T=x.size(0), capacity=page_table.size(0)*cache_pool.size(1);
+  TORCH_CHECK(K0>=0&&T>=0&&K0+T<=capacity,"invalid paged cache logical range");
+  c10::cuda::CUDAGuard guard(x.device());
+  auto xn=torch::empty_like(x); rms_norm_half_out(x,attn_norm,xn); auto qa=torch::matmul(xn,q_a.t()); rms_norm_half_out(qa,q_a_norm,qa);
+  auto qb=torch::matmul(qa,q_b.t()).view({T,8,256}); auto q_nope=qb.slice(-1,0,192); auto q_rope=rope(qb.slice(-1,192,256),positions); auto q_latent=torch::bmm(q_nope.transpose(0,1),k_b.transpose(1,2)).transpose(0,1).contiguous();
+  auto kv=torch::matmul(xn,kv_a.t()); auto latent=rms(kv.slice(-1,0,512),kv_a_norm); auto k_rope=rope(kv.slice(-1,512,576).unsqueeze(1),positions).select(1,0); auto entry=torch::cat({latent,k_rope},-1).contiguous();
+  paged_kv_scatter_cuda(cache_pool,page_table,K0,entry);
+  xn=torch::Tensor(); qa=torch::Tensor(); qb=torch::Tensor(); q_nope=torch::Tensor();
+  kv=torch::Tensor(); latent=torch::Tensor(); k_rope=torch::Tensor(); entry=torch::Tensor();
+  // Fixed dense paged MLA; allocation failures propagate.
+  auto out_latent=paged_prefill_mla(q_latent.contiguous(),q_rope.contiguous(),cache_pool,page_table,K0);
+  auto heads=torch::bmm(out_latent.transpose(0,1),v_b.transpose(1,2)).transpose(0,1).contiguous(); auto partial=torch::matmul(heads.reshape({T,-1}),attn_out.t());
+
+  return {cache_pool,partial};
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME,m){
+  m.def("forward_rank_paged_inplace_half",&forward_rank_paged_inplace_half,pybind11::call_guard<pybind11::gil_scoped_release>());
+  m.def("forward_rank_paged_inplace_tc",&forward_rank_paged_inplace_tc,"paged inplace TC rank",pybind11::call_guard<pybind11::gil_scoped_release>());
+  m.def("forward_rank_paged_batch_q2_k0",&forward_rank_paged_batch_q2_k0,"graph-safe paged batched Q2 TC rank",pybind11::call_guard<pybind11::gil_scoped_release>());
+}

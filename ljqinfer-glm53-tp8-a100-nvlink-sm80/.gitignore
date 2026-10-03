@@ -1,0 +1,87 @@
+# === NEVER track generated artifacts ===
+archive/
+**/archive/
+
+# Python / build noise
+__pycache__/
+*.py[cod]
+*$py.class
+*.so.d
+*.o
+*.a
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# One-shot diagnostics (keep source of truth in CRITICAL docs; large dumps stay out)
+*.log
+_tmp*
+_snippets.txt
+*_golden*.txt
+.golden*
+profile_full_*.json
+bench_*_2026*.json
+bench_attn_48k8k_*.log
+bench_special_streams_*.json
+bench_special_streams_*.log
+full_prefill_k0q_bench_*.log
+full_text_prefill_*.log
+probe_amdahl.log
+
+# Historical bak (reference only; not production)
+*.bak
+model_orig_*.py
+prefill_attn_orch.pre2k_orig.cpp
+
+
+# Torch extension build caches and selected immutable artifacts (never track)
+.torch_ext/
+.operator_build/
+artifacts/
+*.pid
+# Runtime tokenizer asset intentionally tracked.
+!glm52_tokenizer.json
+
+# Generated experiment artifacts (keep source/docs, never historical outputs)
+experiments/**/build/
+experiments/**/build_*/
+experiments/**/.torch_ext/
+experiments/**/backup_predeploy/
+experiments/**/deploy_stage/
+experiments/**/sub2k_smoke_artifacts/
+experiments/**/*.so
+experiments/**/*.o
+experiments/**/*.a
+experiments/**/*.json
+experiments/**/*.partial.json
+experiments/**/*.log
+experiments/**/*.pid
+experiments/**/*.exit
+experiments/**/*.ok
+experiments/**/*.sha256
+experiments/**/*.baseline
+experiments/**/*.new
+experiments/**/*.launch
+experiments/**/.ninja_deps
+experiments/**/.ninja_log
+experiments/**/build.ninja
+# Experimental workspace (never commit)
+experiments/
+ops/third_party/
+
+# Local documentation and validation workspaces are never tracked.
+docs/
+tests/
+test/
+*.md
+/bench_*.py
+
+# Machine-specific generated binary selection lock
+/ops/selected_ops.lock.json

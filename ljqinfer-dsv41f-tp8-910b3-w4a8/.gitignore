@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+wcache/
+artifacts/
+*.log
+/ops/cann/*.so
+/ops/cann/moe_fp4_vector.asset.json
+opsbak/
+/ops/decode/*.so
+/ops/decode/tiling_m*.bin
+/ops/decode/draft_vocab_tiling_m*.bin
+/ops/decode/markov_tiling_m*.bin
+/ops/decode/draft_down_tiling_m*.bin
+
+# CANN crash dumps / kernel build artefacts
+extra-info/

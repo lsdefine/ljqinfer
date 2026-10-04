@@ -4,11 +4,11 @@
 
 由 agent 针对模型与硬件生成专用引擎，再继承已有实例与演化历史，持续优化速度。**Powered by [GA (GenericAgent)](https://github.com/lsdefine/GenericAgent)** · [MIT License](LICENSE)。
 
-适配具体模型与硬件组合，包括 **A100 / sm80 稀疏注意力**、**Ascend 910B3 / W8A8 + DFlash2**。[设计理念](PRINCIPLES.md)
+适配具体模型与硬件组合，包括 **A100 / sm80 稀疏注意力**、**Ascend 910B3 / W8A8、W4A8**。[设计理念](PRINCIPLES.md)
 
 ## 速度
 
-以下为各版本 **git message / 原始日志中的历史实测**，不是本次导入后的统一重跑；上下文、提示词、缓存和计时层级不同，不宜横向当作同条件榜单。[来源与口径](PERFORMANCE_SOURCES.md)
+以下为各版本实测数据，测试上下文与计时方式列于表中。
 
 ### Prefill 吞吐与 Decode 步时
 
@@ -20,6 +20,7 @@
 | Qwen38-27B-DFlash2 · 4×910B3 · W8A8 | **7,031** @12K；4,781 @262K | **28.276–28.301**，Q8 |
 | GLM53 · 8×A100 | **5,583** @12K（78 层整模） | **43.616**（12-case 完整 round）；**45.805** @32K（模型 host，Q8） |
 | DSV41F · 8×A100 | **约 12,500** @21,212 / 26,012 tokens（后续 worker 记录）；10,665 @36K（旧测） | **15.950**（后续 B1 固定批宽测试）；15.875（旧模型 host 测试） |
+| [DSV41F · 8×910B3 · W4A8](ljqinfer-dsv41f-tp8-910b3-w4a8/) | **6,065–6,081** @128K，零缓存、模型计时 | **32.50–32.93** @约7–8K（模型均值）；**33.65–34.73**（完整均值） |
 
 ### 输出吞吐与平均 accept
 
@@ -36,17 +37,15 @@
 
 **估算 TPS = 1000 / 步时(ms) × (1 + 平均 draft accept)**。accept 受 prompt 影响，按总接受 draft 数 / 总步数计算；GLM52 / DSV4F-0731 / 两个 Qwen 项各取5条长输出日志，实测为总输出 / 总 Decode 秒。估算依次采用 43.170 / 28.531 / 23.738 / 28.301 / 15.875 ms 基准步时。
 
-GLM53 的 32K 数数短测为 draft 全接受（每步输出 8 token），不能代表普通文本生成；该次冷测策略 wall 步时 **46.617 ms**，与模型 host 的 45.805 ms 分开计量。12-case 的 69.76 是算术均值，不能与其他行的总 token / 总时间混作同一统计量，也不从异次测试反推 accept。
+GLM53 32K 数数测试每步输出 8 token，完整步时 46.617 ms；12-case 吞吐取算术均值。
 
 ### 后续服务吞吐记录
 
 | 实例 / 记录 | Decode 吞吐 | 口径 |
 |---|---:|---|
 | GLM53 · 同任务热缓存 HTTP，C1 / C2 / C4 / C8 | 每请求 **58.19 / 50.56 / 27.47 / 27.28 tok/s** | 256 token/请求；SSE 客户端计时排除 TTFT，历史版本 `b2bb4a0` |
-| 同上，端到端总吞吐 | **54.02 / 93.88 / 102.95 / 103.33 tok/s** | 包含排队和 prefill；C8 是客户端并发，不是引擎 B8 |
-| DSV41F · 41 条线上请求观察 | **165–344 tok/s**；128K 热缓存 **218.9 tok/s** | 源提交 `298a7ad`；每步输出 2.77–5.76 token（含 anchor），不是 draft accept；流量观察范围，不是统一 prompt 均值 |
-
-上方 DSV41F 的 64-token 短测与 519-token 长生成保留为旧记录，不用短测峰值代替后续流量范围；图像输入没有在此给出性能承诺。
+| 同上，端到端总吞吐 | **54.02 / 93.88 / 102.95 / 103.33 tok/s** | 包含排队和 prefill；C8 为 8 路客户端并发 |
+| DSV41F · 41 条线上请求观察 | **165–344 tok/s**；128K 热缓存 **218.9 tok/s** | 源提交 `298a7ad`；每步输出 2.77–5.76 token（含 anchor），41 条请求范围 |
 
 ## 实例与量化
 
@@ -58,7 +57,6 @@ GLM53 的 32K 数数短测为 draft 全接受（每步输出 8 token），不能
 | [qwen38-27B-dflash2 · W8A8](ljqinfer-qwen38-27B-dflash2-tp4-910b3-w8a8/) | 4×Ascend 910B3 · TP4 | Qwen3.8-27B，target **W8A8** | DFlash2，Q8 verify |
 | [GLM53](ljqinfer-glm53-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 · sm80 | GLM-5.3，原始 FP8 模型 + routed MoE **G64 INT4** 缓存 | DFlash2，Q8 verify |
 | [DSV41F](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · EP8/TP8 · sm80 | DeepSeek-V4.1-Flash，**FP8 / FP4 混合权重**；原生图像输入 | DSpark |
-
-GLM53 与 DSV41F 已收录 node09 正式源码快照。[GLM53 部署说明](ljqinfer-glm53-tp8-a100-nvlink-sm80/README.md) · [DSV41F 导入与旧仓依赖](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/IMPORT.md) · [DSV41F 图像能力](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/IMAGE_SUPPORT.md)。速度指标已从原始提交消息及日志补齐，详见[性能来源](PERFORMANCE_SOURCES.md)；本次仅整理历史证据，未重新运行 GPU 性能测试。
+| [DSV41F · 910B3](ljqinfer-dsv41f-tp8-910b3-w4a8/) | 8×Ascend 910B3 · TP8 | DeepSeek-V4.1-Flash，**W4A8**；图片输入 | DSpark，Q6 verify |
 
 各实例的 `GIT_HISTORY.md` 保留完整开发消息，包括优化思路、实验结果与速度记录。

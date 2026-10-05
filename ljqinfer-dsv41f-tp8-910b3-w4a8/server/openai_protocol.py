@@ -61,8 +61,8 @@ def to_service_request(body: Dict[str, Any]) -> Dict[str, Any]:
     if body.get("n", 1) != 1:
         raise ServiceError("only n=1 is supported")
     response_format = body.get("response_format")
-    if response_format not in (None, {"type": "text"}):
-        raise ServiceError("only response_format.type='text' is supported")
+    if response_format not in (None, {"type": "text"}, {"type": "json_object"}):
+        raise ServiceError("supported response_format types: text, json_object (prompt-based)")
     if body.get("stop") not in (None, [], ""):
         raise ServiceError("custom stop sequences are not supported")
     tool_choice = body.get("tool_choice", "auto")
@@ -135,6 +135,12 @@ def to_service_request(body: Dict[str, Any]) -> Dict[str, Any]:
         "stream": bool(body.get("stream")),
         "temperature": body.get("temperature"),
     }
+    if response_format == {"type": "json_object"}:
+        # Lightweight JSON mode for both blocking and streaming requests.
+        system_parts.append(
+            "Response format: JSON object. Your final answer must be exactly one "
+            "valid JSON object with double-quoted keys. Output only the JSON object, "
+            "without Markdown fences, explanations, or text before or after it.")
     if system_parts:
         request["system"] = "\n\n".join(system_parts)
     if tool_choice != "none" and "tools" in body:

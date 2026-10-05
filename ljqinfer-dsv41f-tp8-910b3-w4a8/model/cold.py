@@ -3,8 +3,6 @@ import torch
 import torch.distributed as dist
 from strategy.cold_kv import Field
 
-_SPAN_CAP = 64
-
 
 def fields_for(pool):
     if not pool.sources or not pool.windows:
@@ -169,24 +167,27 @@ def restore_prefix_tp(cache, pool, slot, lease, *, rank, world, device,
     """
     if pool.pos[slot] != 0:
         raise ValueError('restore requires an empty destination position')
-    head = torch.zeros(2 + 2 * _SPAN_CAP, dtype=torch.int64)
+    head = torch.zeros(2, dtype=torch.int64)
     spans = ()
     if rank == 0:
         _check(cache, pool, slot)
         cache._validate(lease)
         spans = tuple(cache.spans(lease)) if lease.ids else ()
-        if len(spans) > _SPAN_CAP:
-            raise ValueError('hit spans exceed header capacity')
         head[0], head[1] = lease.token_count, len(spans)
-        for j, (_, start, end) in enumerate(spans):
-            head[2 + 2 * j], head[3 + 2 * j] = start, end
     if world > 1:
-        dist.broadcast(head, 0, group=group)     # gloo: host header
+        dist.broadcast(head, 0, group=group)     # gloo: host counts
     hit, n_spans = int(head[0]), int(head[1])
     if hit == 0:
         return 0
-    bounds = [(int(head[2 + 2 * j]), int(head[3 + 2 * j]))
-              for j in range(n_spans)]
+    # Cache chains grow with appended turns, not just prompt length. Send the
+    # exact host-side geometry instead of imposing a fixed segment ceiling.
+    edges = torch.empty((n_spans, 2), dtype=torch.int64)
+    if rank == 0:
+        for j, (_, start, end) in enumerate(spans):
+            edges[j, 0], edges[j, 1] = start, end
+    if world > 1:
+        dist.broadcast(edges, 0, group=group)
+    bounds = edges.tolist()
     nbytes = sum(_span_bytes(pool, s, e) for s, e in bounds)
     if rank == 0:
         host = pack_spans(cache, pool, spans)

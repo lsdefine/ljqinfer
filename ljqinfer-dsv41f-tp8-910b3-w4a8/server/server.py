@@ -269,7 +269,7 @@ async def messages(request: Request):
                 async with receive:
                     while True:
                         event = None
-                        with anyio.move_on_after(10) as timeout_scope:
+                        with anyio.move_on_after(5) as timeout_scope:
                             try:
                                 event = await receive.receive()
                             except anyio.EndOfStream:
@@ -406,7 +406,7 @@ async def chat_completions(request: Request):
                 async with receive:
                     while True:
                         chunk = None
-                        with anyio.move_on_after(10) as timeout_scope:
+                        with anyio.move_on_after(5) as timeout_scope:
                             try:
                                 chunk = await receive.receive()
                             except anyio.EndOfStream:

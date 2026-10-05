@@ -5913,3 +5913,27 @@ Increase host prefix cache default to 50 GiB; verify generation and cache reuse
 ```text
 fix(api): accept OpenAI user image_url blocks; verify blocking and SSE vision
 ```
+
+---
+
+```text
+feat(api): support prompt-based json_object response format
+
+Append JSON object instructions while preserving user system prompts and reasoning settings. Verify original blocking reproduction returns {"ok": true} in 0.77s; SSE JSON and text regression pass. json_schema returns explicit 400. Front-end only restart; engine unchanged.
+```
+
+---
+
+```text
+fix(api): send SSE idle heartbeats every five seconds
+
+Both OpenAI and Anthropic transports retain comment-only heartbeats during queue/prefill waits. Live long-input tests: OpenAI heartbeats 5.34..35.35s before first event 36.84s; Anthropic 5.29..20.29s before first event 21.89s. Both completed with OK. Only API restarted.
+```
+
+---
+
+```text
+fix(cache): remove 64-span TP restore header limit
+
+Root cause: legitimate appended prefix chains exceed the fixed 64-span header; rank0 throws before the Gloo broadcast, taking down TP8. Broadcast hit/count then exact CPU bounds using one uniform protocol; cache layout and device payload remain unchanged. CPU regression: old implementation fails at 65 spans; new TP1 and 8-process Gloo pass 0/1/64/65/129 spans and clipped endpoints, matching all restored tensors and untouched tails. Existing ownership/eviction tests pass. Requires engine restart; no kernel rebuild. Previous engine revision 9945dc4. NPU integrated generation validation follows deployment.
+```

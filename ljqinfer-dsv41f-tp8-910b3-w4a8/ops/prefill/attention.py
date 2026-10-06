@@ -23,41 +23,44 @@ def frequencies(table, positions, *, library=None):
 @span("index")
 def select(q, weight, keys, positions, valid, *, ratio, total_heads,
            parallel, workspace, topk=512, candidates=None, make_candidates=False, library=None):
-    """Fixed Cube/TP tiles; grouped native NPU TopK."""
+    """CANN fused scoring/TopK for a complete ratio-two eager prefix.
+
+    Split query parity so right-aligned causality adds one compressed key per
+    row. CED/decode use their own paged adapters; no legacy score fallback.
+    """
+    if ratio != 2 or total_heads != 32 or topk != 512 or candidates is not None or make_candidates:
+        raise ValueError('eager index expects ratio2, 32 heads, Top512, no CED candidates')
     rows, heads, dim = q.shape
-    width = max(32, (len(keys)+31)//32*32)
-    bank = keys
-    if len(keys) != width:
-        bank = workspace.bank[:width]
-        bank.zero_()
-        bank[:len(keys)].copy_(keys)
-    tile, group = workspace.tile, workspace.group
-    out = torch.empty((rows, topk), dtype=torch.int64, device=q.device)
-    if make_candidates:
-        candidates = out.new_empty((rows, 16384))
-    for begin in range(0, rows, group):
-        end = min(begin+group, rows)
-        pos = positions[begin:end]
-        dot, score, values, order = workspace.views(end-begin, heads, width, min(topk, width))
-        # Four fixed compute tiles share one selection. Each tile
-        # writes disjoint score rows; dot storage is reused on the same stream.
-        for lo in range(begin, end, tile):
-            hi = min(lo+tile, end)
-            block = dot[:(hi-lo)*heads]
-            native.matmul_fp32.out(q[lo:hi].reshape(-1, dim), bank.t(), block)
-            native.score_reduce(block, weight[lo:hi], positions[lo:hi], valid,
-                                len(keys), ratio, dim**-.5 * total_heads**-.5,
-                                score[lo-begin:hi-begin])
-            parallel.sum(score[lo-begin:hi-begin])
-        if make_candidates:
-            block_values, block_order = torch.sort(native.candidate_blocks(score, pos, ratio),
-                                       descending=True, stable=True)
-            candidates[begin:end] = native.candidate_expand(block_values, block_order, pos, valid, len(keys), ratio)
-        if candidates is not None:
-            score = native.candidate_mask(score, candidates[begin:end], len(keys))
-        torch.topk(score, min(topk, score.shape[-1]), sorted=True, out=(values, order))
-        native.sorted_ids(values, order, topk, out[begin:end])
-    return (candidates, out) if make_candidates else out
+    limits = torch.minimum((positions + 1) // ratio, valid)
+    if len(keys) <= topk:
+        ids = torch.arange(topk, device=q.device).expand(rows, -1)
+        return torch.where(ids < limits[:, None], ids, -1)
+    start = int(positions[0].item())
+    gq = q.new_empty((total_heads // heads, *q.shape))
+    gw = weight.new_empty((total_heads // heads, *weight.shape))
+    parallel.logits(q.contiguous(), out=gq)
+    parallel.logits(weight.contiguous(), out=gw)
+    query = gq.permute(1, 0, 2, 3).reshape(rows, total_heads, dim)
+    weights = gw.permute(1, 0, 2).reshape(rows, total_heads)
+    pages = (len(keys) + 1023) // 1024
+    bank = torch.nn.functional.pad(keys, (0, 0, 0, pages * 1024 - len(keys)))
+    bank = bank.view(pages, 1024, 1, dim)
+    table = torch.arange(pages, device=q.device, dtype=torch.int32)[None]
+    out = torch.full((rows, topk), -1, device=q.device, dtype=torch.int64)
+    for offset in range(ratio):
+        part = query[offset::ratio].contiguous()
+        n = len(part)
+        if not n:
+            continue
+        length = min(len(keys), (start + offset + ratio * (n - 1) + 1) // ratio)
+        if not length:
+            continue
+        sq = torch.tensor([n], device=q.device, dtype=torch.int32)
+        sk = torch.tensor([length], device=q.device, dtype=torch.int32)
+        ids = native.paged_index(part[None], bank, weights[offset::ratio].contiguous()[None],
+                                 sq, sk, table, topk).view(n, topk).long()
+        out[offset::ratio] = torch.where((ids >= 0) & (ids < limits[offset::ratio, None]), ids, -1)
+    return out
 
 
 def attend(q, local, bank, selected, positions, meta, sink, *, ratio, library=None):

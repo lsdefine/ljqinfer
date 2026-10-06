@@ -3,6 +3,7 @@ import torch
 from ops.prefill import attention as a, residual as r
 from model.prefill_linears import Linears
 from model.prefill_config import rotary_frequencies
+from ops.prefill.attention_units import attention_prepare, attention_finish, source_append
 
 
 class PrefillAttention:
@@ -10,6 +11,7 @@ class PrefillAttention:
         self.layer, self.c, self.w = layer, config, weights
         self.p, self.parallel = f'layers.{layer}.attn', parallel
         self.lin, self.library = Linears(weights, layer), library
+        self.norms = {name: weights[self.p+f'.{name}_norm.weight'] for name in ('q', 'kv')}
 
     def norm(self, x, name):
         return r.rms(x, self.w[self.p+name], self.c['norm_eps'])
@@ -24,24 +26,15 @@ class PrefillAttention:
         source = state.past.sources[self.layer]
         self.end = state.end
         x = x[state.append_start-state.start:]
-        values = lin('c_wkv', x).float()
-        if source.ratio == 2:
-            scores = lin('c_wgate', x).float()
-            raw = a.compress(values, scores, source.kv_state[state.slot],
-                             source.score_state[state.slot], state.append_start, library=self.library)
-        else:
-            raw = values
-        if not len(raw):
-            return
-        pos = torch.arange(state.append_start//source.ratio, state.end//source.ratio,
-                           device=x.device, dtype=torch.int64) * source.ratio
-        freqs = self.freqs(pos)
-        latent = self.norm(raw.to(torch.bfloat16), '.compressor.norm.weight').to(torch.bfloat16)
-        index = self.norm(lin('i_wk', latent), '.indexer.k_norm.weight')
-        latent = a.qdq(a.rope(latent, freqs, library=self.library),
-                       'compressed', library=self.library)
-        index = a.qdq(a.rope(index, freqs, library=self.library), 'index', library=self.library)
-        state.publish(self.layer, latent, index)
+        rows = source_append(x, linear=lin,
+            norm_weight=self.w[self.p+'.compressor.norm.weight'],
+            index_norm_weight=self.w[self.p+'.indexer.k_norm.weight'], eps=c['norm_eps'],
+            ratio=source.ratio,
+            carry_kv=source.kv_state[state.slot] if source.ratio == 2 else None,
+            carry_score=source.score_state[state.slot] if source.ratio == 2 else None,
+            start=state.append_start, frequencies=self.freqs, library=self.library)
+        if rows is not None:
+            state.publish(self.layer, *rows)
 
     def __call__(self, x, state):
         c, lin, world = self.c, self.lin, self.parallel.world
@@ -53,20 +46,12 @@ class PrefillAttention:
         if compressed not in state.freqs:
             state.freqs[compressed] = self.freqs(state.positions(x.device))
         freqs = state.freqs[compressed]
-        qr = self.norm(lin('wq_a', x), '.q_norm.weight')
-        q = lin('wq_b', qr).view(len(x), c['n_heads']//world, c['head_dim'])
-        q = a.rope(q, freqs, library=self.library)
-        kv = a.rope(self.norm(lin('wkv', x), '.kv_norm.weight'), freqs, library=self.library)
-        kv = a.qdq(kv, 'local', library=self.library)
-        iq = iw = None
-        if view.mode in ('source', 'full', 'reindex'):
-            iq = lin('i_wq_b', qr).view(len(x), c['index_n_heads']//world, c['index_head_dim'])
-            iq = a.qdq(a.rope(iq, freqs, library=self.library), 'index', library=self.library)
-            iw = lin('i_weights', x).float()
+        q, kv, iq, iw = attention_prepare(x, freqs, linear=lin,
+            norms=self.norms,
+            eps=c['norm_eps'], heads=c['n_heads']//world, head_dim=c['head_dim'],
+            index_heads=c['index_n_heads']//world, index_dim=c['index_head_dim'],
+            needs_index=view.mode in ('source', 'full', 'reindex'), library=self.library)
         out = state.attend(self.layer, q, kv, iq, iw, self.w[self.p+'.attn_sink'],
                            self.parallel, c['index_n_heads'], c['index_topk'])
-        out = a.rope(out, freqs, inverse=True, library=self.library)
-        projected = lin('wo_a', out.flatten(1))
-        result = lin('wo_b', projected).float()
-        self.parallel.sum(result)
-        return result.to(x.dtype)
+        return attention_finish(out, freqs, linear=lin, comm=self.parallel,
+                                dtype=x.dtype, library=self.library)

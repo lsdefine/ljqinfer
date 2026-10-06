@@ -5937,3 +5937,173 @@ fix(cache): remove 64-span TP restore header limit
 
 Root cause: legitimate appended prefix chains exceed the fixed 64-span header; rank0 throws before the Gloo broadcast, taking down TP8. Broadcast hit/count then exact CPU bounds using one uniform protocol; cache layout and device payload remain unchanged. CPU regression: old implementation fails at 65 spans; new TP1 and 8-process Gloo pass 0/1/64/65/129 spans and clipped endpoints, matching all restored tensors and untouched tails. Existing ownership/eviction tests pass. Requires engine restart; no kernel rebuild. Previous engine revision 9945dc4. NPU integrated generation validation follows deployment.
 ```
+
+---
+
+```text
+fix: isolate invalid requests and bound cache/vision memory with pooled admission
+```
+
+---
+
+```text
+chore: move A2-3 frontend to 8001 for isolated benchmarking; health and generation verified
+```
+
+---
+
+```text
+refactor(prefill): isolate eager semantic operators with TP8 parity tests
+
+TP8 baseline aef455f: 3040/3040 layer/state tensor comparisons exact for chunks [1], [127,2,129], [513]. HC/MoE leaf tests pass on NPU for 1/127/129/513 rows; HTTP generation passes on port 8001. 8192-token timings recorded with high variability; no speedup claim.
+```
+
+---
+
+```text
+fix(prefill): eliminate allocator retries and prebind static operator inputs
+
+TP8: 3040 exact comparisons; 4 warmup + 30 paired 8192-token encoder runs. Baseline median 1.319995s, candidate 1.322267s (+0.17%); 0 allocator retries across all ranks. Strict zero regression not established. Native RPC generation returns 2; four uncached 8192-token requests pass.
+```
+
+---
+
+```text
+Optimize standalone prefill compositions; 52 frozen A/B and 16 leaf checks pass
+
+Single-NPU synthetic tensors only, no engine/TP8 validation. Improve RMS, HC/Engram temporaries, dispatch and padded activation. Preserve rejected native candidates; per-operator optimization remains incomplete.
+```
+
+---
+
+```text
+Optimize 8192 prefill leaves: TP8 index 1.05-1.14x, HC 1.46-1.48x; chunk target unverified
+```
+
+---
+
+```text
+prefill: native index scheduling and pooled scratch, TP8 chunk 1.046s
+
+Development milestone versus frozen 0dccf41, not service deployment.
+Full model first 20 eager layers, 8192 tokens in one chunk; same-process
+alternating A/B, 2 warmups + 8 steady samples. Max-rank wall median:
+1.152910117 -> 1.046378853s, 7828.9tps, latency -9.24%.
+Strict 8000tps (1.024s) NOT reached. Encoder-only, not CED/cache/decode/TTFT.
+
+Native score_tiles owns GEMM/score/32-row HCCL ordering. Narrow-key
+TopK group up to 2048 reuses startup arena, removes large_dot allocation.
+HC collapse >=8192 uses 40 blocks, otherwise 24. Shorter attention
+orchestration; speed layout branch <=5 lines.
+
+Eight ranks: 4504 exact checks including 36 snapshots + 3 selects/rank,
+[1], [127,2,129], [513], [8192,129], [2048,2049]. Zero allocation retries.
+Small paired medians (2 warmups + 6 steady): 1 .196621->.194899s;
+129 .224266->.218118s; 513 .312764->.299640s. Not zero total allocations.
+Current Python/workspace + namespace-only isolated native source build
+validated against frozen resident baseline. Full-capacity context,
+service/decode regression not retested; A2-1/A2-2 untouched.
+
+Evidence: /data/prefill_chunk_goal/verified_delivery.json
+Audit: python3 /data/prefill_chunk_goal/audit_prefill_chunk.py /data/prefill_chunk_goal
+Probes: integrated_{full,boundary,multichunk,small_timing}_probe.py there.
+Rollback 0dccf41; Python and score_tiles extension must match. Rebuild
+Torch extensions and restart for deployment/rollback. Resident remains
+frozen baseline; A2-3 service stopped. No push or R-drive sync.
+```
+
+---
+
+```text
+validation: TP8 36k consecutive prefill 4.580447s, 8048.1 tok/s
+
+Validation-only checkpoint; production code unchanged from b7f24be.
+36864 tokens = 4*8192+4096, same slot with cumulative KV and history.
+First 20 layers eager; 2 warmups, 5 steady trials, max rank then median.
+All 8 ranks completed, zero allocation retries. Pages pre-reserved;
+excludes CED, cache persistence, decode and HTTP. No added interchunk sync.
+This run measures performance, not new 36k numerical-reference parity.
+Evidence: /data/prefill_chunk_goal/prefill_36k_rank0..7.json,
+prefill_36k_probe.py and prefill_36k_summary.json on A2-3.
+No runtime/ABI change, rebuild or restart required for this commit.
+No push/deployment; A2-1/A2-2 untouched. Previous code checkpoint b7f24be.
+```
+
+---
+
+```text
+Optimize selected Engram host hash and NEON gather
+
+Keep request history in model and CPU dequantization in standalone ops.
+TP8 first-20-layer eager confirmation: 8192 1.040122 -> 1.015963 s,
+10 warm alternating pairs; 36k sequence 4.584805 -> 4.528436 s, 4 pairs.
+Eight ranks exact state checks, 384 real-table cases, zero alloc retries.
+CPU regression: 12 gather, 450 hash, 8 invalid-input cases passed.
+Repro and raw evidence: ops/prefill/HOST_ENGRAM_RESULTS.md.
+Still above 1s. Fresh serving/full TTFT/full pytest not validated.
+```
+
+---
+
+```text
+Fuse prefill MoE finish with exact shared rounding
+```
+
+---
+
+```text
+Fuse W2 rounding into fixed-order prefill expert combine
+
+Preserve FP16->BF16 rounding and sorted-bank FP32 addition while removing
+a 480 MiB BF16 temporary at 8192 tokens. Share kernel template and retain
+short-chunk composition via a three-line shape dispatch below 4096.
+
+A2-3 TP8 first20 eager encoder: final alternating max-rank AB medians
+8192 1.013293 -> 0.991782s; 36864 4.491429 -> 4.426610s (8327.8 tok/s).
+Independent fresh-process all-fused confirmation reached 1.006167s;
+not a claim of stable subsecond latency. Five state cases exact on all
+eight ranks, timed branch coverage confirmed, zero allocation retries.
+
+Reproduce independent oracle: PYTHONPATH=. python scripts/test_prefill_combine_half.py
+Build/AB commands and raw evidence: ops/prefill/W2_COMBINE_RESULTS.md.
+HTTP/full-model TTFT/decode/full suite and other machines unvalidated.
+```
+
+---
+
+```text
+Fuse W13 BF16 rounding into routed SwiGLU
+
+Preserve BF16 rounding and share BF16/half kernel template; leave dynamic quant and TP unchanged. Corrected 49152x576 leaf activation 0.2070 -> 0.1555 ms; activation+quant+pad320 0.3853 -> 0.3275 ms. Two independent TP8 five-state AB runs exact on all ranks, zero alloc retries; regression14 cases + 4 invalid. Whole-prefill gains NOT established: 8192 confirmation 0.992416 -> 0.991817 s, 36k 4.409354 -> 4.430329 s. Retain leaf optimization; do not claim no whole-prefill regression. Reproduction and full boundaries in W13_SWIGLU_RESULTS.md.
+```
+
+---
+
+```text
+prefill: use CANN LightningIndexer for eager Top512
+
+Gather index heads and split query parity for right-aligned ratio2 causality.
+Keep direct selection for <=512 keys; no legacy scoring fallback.
+User-approved gate: final semantic correctness, not bitwise baseline logits.
+
+Validation on A2-3 TP8: 16 causal/count/unique boundary cases through 128k;
+6 chat-formatted full-generation cases baseline/official, exact expected
+answers and EOS on all ranks, zero alloc retries. Cold prefix cache disabled.
+Alternating 6-round eager A/B (first 2 warmups, max rank per sample):
+8192 1.006515 -> 0.975189 s (8400 tok/s); 36864 4.434054 -> 4.066441 s
+(9065 tok/s). Timing is first-20-layer eager, excludes CED and service TTFT.
+
+Repro: scripts/test_prefill_official_index.py under engine CANN Python;
+full A/B: python3 /data/prefill_official_accept/launch_accept.py.
+Reports and frozen oracle retained outside engine in that directory.
+128k full-model semantics, tool calls and vision not tested by this change.
+No claim that official scoring is numerically more accurate than baseline.
+```
+
+---
+
+```text
+serve: restore A2-3 API port 8000 after official index validation
+
+Official prefill ba51fba now serving via TP8 engine. 5-minute mixed B1/B2/B4 streaming/nonstreaming API soak passed; 8k/36k/128k retrieval correct. 128k API model prefill 15.064s (~8698 tok/s), TTFT 15.987s. All eight rank PIDs unchanged, no fatal errors, external traffic HTTP200. Evidence /data/service_accept_8000/summary.json. Not a long-duration soak.
+```

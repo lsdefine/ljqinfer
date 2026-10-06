@@ -154,17 +154,21 @@ def unpack_into(pool, slot, bounds, packet):
     return off
 
 
-def restore_prefix_tp(cache, pool, slot, lease, *, rank, world, device,
-                      group=None):
-    """Restore a cache hit on every rank from a single host->device0 transfer.
+class RestoreWorkspace:
+    def __init__(self, pool, device, tokens=8192):
+        from math import lcm
+        alignment = lcm(*(g[-1] for g in _geometry(pool)))
+        if tokens <= 0 or tokens % alignment:
+            raise ValueError('restore chunk must align to compression ratios')
+        self.tokens = tokens
+        size = _span_bytes(pool, 0, tokens)
+        self.host = torch.empty(size, dtype=torch.uint8, pin_memory=str(device).startswith('npu'))
+        self.device = torch.empty(size, dtype=torch.uint8, device=device)
 
-    Rank 0 alone owns the cold cache, which is plain host memory and knows
-    nothing of ranks.  It stages the whole hit into device 0 once and broadcasts
-    it over the device collective, so a restore costs one PCIe crossing rather than `world`
-    of them.  Followers recover the geometry from a small integer header and
-    rebuild byte-identical slices.  The import itself stays per-rank: `ensure`
-    and `mark_cold` touch local page state and must run everywhere.
-    """
+
+def restore_prefix_tp(cache, pool, slot, lease, *, rank, world, device,
+                      group=None, workspace):
+    """Restore through a startup-owned bounded staging area on every rank."""
     if pool.pos[slot] != 0:
         raise ValueError('restore requires an empty destination position')
     head = torch.zeros(2, dtype=torch.int64)
@@ -188,18 +192,27 @@ def restore_prefix_tp(cache, pool, slot, lease, *, rank, world, device,
     if world > 1:
         dist.broadcast(edges, 0, group=group)
     bounds = edges.tolist()
-    nbytes = sum(_span_bytes(pool, s, e) for s, e in bounds)
-    if rank == 0:
-        host = pack_spans(cache, pool, spans)
-        if host.numel() != nbytes:
-            raise ValueError('packed payload contradicts pool geometry')
-        packet = host.to(device)
-    else:
-        packet = torch.empty(nbytes, dtype=torch.uint8, device=device)
-    if world > 1:
-        dist.broadcast(packet, 0)                # HCCL: replicated compressed KV payload
     pool.ensure(slot, hit)
-    if unpack_into(pool, slot, bounds, packet) != nbytes:
-        raise ValueError('unpacked payload contradicts pool geometry')
+    for j, (start, end) in enumerate(bounds):
+        for left in range(start, end, workspace.tokens):
+            right = min(left + workspace.tokens, end)
+            size = _span_bytes(pool, left, right)
+            packet = workspace.device[:size]
+            if rank == 0:
+                off = 0
+                entry, base, _ = spans[j]
+                for layer, name, dim, dt, ratio in _geometry(pool):
+                    first, last = left // ratio - base // ratio, right // ratio - base // ratio
+                    source = cache.storage[('sources', layer, name)][entry][first:last]
+                    nbytes = source.numel() * dt.itemsize
+                    workspace.host[off:off+nbytes].view(dt).view_as(source).copy_(source)
+                    off += nbytes
+                if off != size:
+                    raise ValueError('packed payload contradicts pool geometry')
+                packet.copy_(workspace.host[:size], non_blocking=False)
+            if world > 1:
+                dist.broadcast(packet, 0)
+            if unpack_into(pool, slot, [(left, right)], packet) != size:
+                raise ValueError('unpacked payload contradicts pool geometry')
     pool.mark_cold(slot, hit)
     return hit

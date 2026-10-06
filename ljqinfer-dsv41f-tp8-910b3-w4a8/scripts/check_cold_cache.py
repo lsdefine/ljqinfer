@@ -55,7 +55,7 @@ def check_tp():
     import os
     import torch.distributed as dist
     from types import SimpleNamespace
-    from model.cold import fields_for, restore_prefix_tp
+    from model.cold import fields_for, restore_prefix_tp, RestoreWorkspace
     world = int(os.environ.get('WORLD_SIZE', '1'))
     rank = int(os.environ.get('RANK', '0'))
     if world > 1:
@@ -104,7 +104,7 @@ def check_tp():
             lease = cache.lookup(range(hit), namespace=cache.namespace)
             assert len(cache.spans(lease)) == count
         got = restore_prefix_tp(cache, pool, 0, lease, rank=rank, world=world,
-                                device='cpu')
+                                device='cpu', workspace=RestoreWorkspace(pool, 'cpu', tokens=4))
         assert got == pool.pos[0] == hit
         for source in pool.sources.values():
             for paged in [source.ckv_pool, source.index_pool]:

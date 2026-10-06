@@ -1,7 +1,6 @@
 """Eager Tensor compositions over the registered optimized NPU kernels."""
 
 import torch
-
 import torch.nn.functional as F
 
 from .native import ops as native
@@ -11,13 +10,16 @@ def _cast_w(w, dtype):
     return w if w.dtype == dtype else w.to(dtype)
 
 
-def rms(x, weight=None, eps=1e-6):
+def rms(x, weight=None, eps=1e-06):
     """RMSNorm accumulated in FP32 with a single rounding on store."""
+    # Only owned temporaries are mutated; FP32 inputs may alias .float().
     y = x.float()
-    y = y * torch.rsqrt(y.pow(2).mean(-1, keepdim=True) + eps)
+    variance = y.square().mean(-1, keepdim=True)
+    variance.add_(eps).rsqrt_()
+    out = y * variance
     if weight is not None:
-        y = y * weight.float()
-    return y.to(x.dtype)
+        out.mul_(weight.float())
+    return out.to(x.dtype)
 
 
 collapse = native.hc_collapse
@@ -27,7 +29,7 @@ def collapse_norm(x, pre, weight, eps=1e-6):
     return rms(collapse(x, pre), weight, eps)
 
 
-def mixes(x, fn, scale, base, *, norm_eps=1e-6, hc_eps=1e-6, iters=20):
+def mixes(x, fn, scale, base, *, norm_eps=1e-06, hc_eps=1e-06, iters=20):
     """Hyper-connection gates (pre[T,h], post[T,h], comb[T,h,h]).
 
     The BF16->FP32 cast with its RMS statistic and the Sinkhorn sweep are the
@@ -36,15 +38,22 @@ def mixes(x, fn, scale, base, *, norm_eps=1e-6, hc_eps=1e-6, iters=20):
     """
     t, h, d = x.shape
     flat, stats = native.hc_cast_stats(x, norm_eps)
-    z = (flat @ fn.t()) * stats
-    pre = torch.sigmoid(z[:, :h] * scale[0] + base[:h]) + hc_eps
-    post = torch.sigmoid(z[:, h:2 * h] * scale[1] + base[h:2 * h]) * 2
-    comb = (z[:, 2 * h:] * scale[2] + base[2 * h:]).view(t, h, h)
-    comb = torch.softmax(comb, -1) + hc_eps
-    comb = comb / (comb.sum(-2, keepdim=True) + hc_eps)
+    z = flat @ fn.t()
+    z.mul_(stats)
+    pre = z[:, :h] * scale[0]
+    pre.add_(base[:h]).sigmoid_().add_(hc_eps)
+    post = z[:, h:2 * h] * scale[1]
+    post.add_(base[h:2 * h]).sigmoid_().mul_(2)
+    comb = z[:, 2 * h:] * scale[2]
+    comb.add_(base[2 * h:])
+    comb = comb.view(t, h, h).softmax(-1)
+    comb.add_(hc_eps)
+    denom = comb.sum(-2, keepdim=True)
+    denom.add_(hc_eps)
+    comb.div_(denom)
     if iters > 1:
         comb = native.hc_sinkhorn(comb, iters - 1)
-    return pre, post, comb
+    return (pre, post, comb)
 
 expand = native.hc_expand
 
@@ -56,18 +65,27 @@ def engram_gate(x, kv, weight, rotation, eps=1e-20):
     already rotated, so the residual stream adds the untouched value.
     """
     n, c, d = x.shape
-    query = (x.float().reshape(-1, 32) @ rotation.t()).view(n, c, d)
+    xf = x.float()
+    query = (xf.reshape(-1, 32) @ rotation.t()).view(n, c, d)
     key, value = kv.float().split([c * d, d], -1)
     key = key.view(n, c, d)
-    rstd = (torch.rsqrt(query.pow(2).mean(-1, keepdim=True) + eps)
-            * torch.rsqrt(key.pow(2).mean(-1, keepdim=True) + eps))
-    dot = (query * weight * key).sum(-1, keepdim=True) * rstd * d**-0.5
-    magnitude = dot.abs().clamp_min(1e-6).sqrt()
-    # copysign falls back to the CPU on the NPU; read the IEEE sign bit instead,
-    # which also keeps -0. on the negative side the way copysign does.
+    qr = query.square().mean(-1, keepdim=True)
+    qr.add_(eps).rsqrt_()
+    kr = key.square().mean(-1, keepdim=True)
+    kr.add_(eps).rsqrt_()
+    qr.mul_(kr)
+    dot = query * weight
+    dot.mul_(key)
+    dot = dot.sum(-1, keepdim=True)
+    dot.mul_(qr).mul_(d ** (-0.5))
+    magnitude = dot.abs()
+    magnitude.clamp_min_(1e-06).sqrt_()
     negative = dot.contiguous().view(torch.int32) < 0
-    gate = torch.sigmoid(torch.where(negative, -magnitude, magnitude))
-    return (x.float() + gate * value.unsqueeze(-2)).to(x.dtype)
+    gate = torch.where(negative, -magnitude, magnitude)
+    gate.sigmoid_()
+    out = gate * value.unsqueeze(-2)
+    out.add_(xf)
+    return out.to(x.dtype)
 
 
 def swiglu(gate, up, limit, route_weight=None):
@@ -100,4 +118,8 @@ def route(x, weight, bias, *, topk, temperature, scale,
 
 def moe_add(routed, shared, dtype=torch.bfloat16):
     """Released finish: shared is rounded to BF16 before the FP32 accumulate."""
+    if (dtype == torch.bfloat16 and routed.dtype == shared.dtype == torch.float32
+            and routed.device.type == "npu" and routed.ndim == 2
+            and routed.shape[-1] == 5120):
+        return native.moe_finish(routed, shared)
     return (routed.float() + shared.to(dtype).float()).to(dtype)

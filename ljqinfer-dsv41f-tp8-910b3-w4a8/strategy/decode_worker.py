@@ -35,6 +35,8 @@ class Engine:
         import torch_npu
         if self.weights is not None:
             raise RuntimeError('engine already loaded')
+        # Avoid eager-prefill allocator flushes beside the persistent decode graphs.
+        torch_npu.npu.memory._set_allocator_settings('expandable_segments:True')
         torch.npu.set_device(self.config.rank)
         weights = DeviceWeights(self.config.cache_root, self.config.rank,
                                 torch.device('npu', self.config.rank))
@@ -213,7 +215,8 @@ class Engine:
         import torch.distributed as dist
         hit = restore_prefix_tp(cache, past, row.slot, lease, rank=self.rank,
                                 world=dist.get_world_size(group=self.ctrl),
-                                device=self.weights.device, group=self.ctrl)
+                                device=self.weights.device, group=self.ctrl,
+                                workspace=self.restore_workspace)
         if not hit:
             return 0
         row.cold_load_seconds = time.perf_counter() - t_load
@@ -290,10 +293,10 @@ class Engine:
             raise ValueError('valid EOS token required')
         self.rank, self.ctrl, self.chunk = self.config.rank, ctrl, chunk
         self.eos_id, self.max_batch = eos_id, 4
-        # Whole pages per slot guarantee that four admitted rows cannot steal
-        # each other's reservation. Logical max_seq alone is not a KV budget.
+        # Per-request logical capacity; physical pages are reserved at admission.
         self.row_cap = min(self.past.max_seq, self.compute.capacity, dec.capacity,
-                           self.past.pt.n_pages // self.past.n_slots * self.past.page_tokens)
+                           self.past.pt.n_pages * self.past.page_tokens)
+        self.reservations = {}
         if self.row_cap <= 7:
             raise ValueError('no Q6 headroom')
         self.hdr = torch.zeros(HEAD + self.max_batch, dtype=torch.int64)
@@ -301,7 +304,7 @@ class Engine:
         self.prefill_logits = torch.empty((1, self.compute.c['vocab_size']),
                                           dtype=torch.float32, device='cpu', pin_memory=True)
         self.rows, self.next_id, self.failed = {}, 0, None
-        self.vision, self.pending_spans = None, []
+        self.pending_spans = []
         return self
 
     def _scheduler_live(self):
@@ -330,9 +333,10 @@ class Engine:
 
     def validate_request(self, tokens, max_new, temperature=0.0):
         self._scheduler_live()
-        if not 0.0 <= float(temperature) < 100.0:
-            raise ValueError('temperature must be in [0, 100)')
-        if not tokens or any(type(t) is not int or not 0 <= t < 129280 for t in tokens):
+        if type(temperature) not in (int, float) or temperature not in (0, 1):
+            raise ValueError('temperature must be 0 or 1')
+        if not isinstance(tokens, (list, tuple)) or not tokens or any(
+                type(t) is not int or not 0 <= t < 129280 for t in tokens):
             raise ValueError('nonempty valid token IDs required')
         if type(max_new) is not int or max_new <= 0:
             raise ValueError('positive integer max_new_tokens required')
@@ -463,45 +467,38 @@ class Engine:
             self.failed = exc
             raise
 
-    def vision_runtime(self):
-        """Load the bf16 vision tower once per rank; the w4a8 pack carries no vision weights."""
-        if self.vision is None:
-            import torch.distributed as dist
-            from model.vision_runtime import load_vision
-            self.vision = load_vision(VISION_ROOT, self.weights.device,
-                                      world=dist.get_world_size(group=self.ctrl),
-                                      rank=self.rank)
-        return self.vision
-
     def exchange_images(self, count, images=None):
-        """Broadcast raw patches, then run the tensor-parallel tower on every rank."""
+        """Validated patches only; transport and output storage is preallocated."""
         import torch
         import torch.distributed as dist
-        from server.image_input import patchify
-        if not 0 < count <= 16:
+        from server.image_input import MAX_IMAGES
+        if not 0 < count <= MAX_IMAGES:
             raise RuntimeError('invalid image count')
-        vision, spans = self.vision_runtime(), []
+        vision, spans, offset = self.vision, [], 0
+        slot = self.past.free_slots[-1]
         for i in range(count):
-            patches = None
+            meta = vision.meta
             if self.rank == 0:
                 image = images[i]
-                patches = torch.from_numpy(patchify(image)).to(torch.float32).contiguous()
-                meta = torch.tensor((image['start'], image['length'],
-                                     image['grid'][0], image['grid'][1],
-                                     image['llm_grid'][0], image['llm_grid'][1],
-                                     patches.shape[0], patches.shape[1]), dtype=torch.int64)
-            else:
-                meta = torch.zeros(8, dtype=torch.int64)
+                meta.numpy()[:] = (image['start'], image['length'], *image['grid'],
+                                   *image['llm_grid'], *image['patches'].shape)
             dist.broadcast(meta, 0, group=self.ctrl)
             start, length, gh, gw, lh, lw, rows, cols = meta.tolist()
-            if patches is None:
-                patches = torch.empty((rows, cols), dtype=torch.float32)
+            if (rows != gh*gw or cols != 588 or rows > vision.max_patches or
+                    offset + length > vision.outputs.shape[1]):
+                raise RuntimeError('invalid validated vision metadata')
+            patches = vision.patch_host[:rows]
+            if self.rank == 0:
+                patches.copy_(torch.from_numpy(images[i]['patches']))
             dist.broadcast(patches, 0, group=self.ctrl)
-            image = {'start': start, 'length': length, 'grid': (gh, gw), 'llm_grid': (lh, lw)}
-            features = vision.encode(patches.to(vision.device, torch.bfloat16), image)
+            device_patches = vision.patch_device[:rows]
+            device_patches.copy_(patches)
+            image = dict(start=start, length=length, grid=(gh,gw), llm_grid=(lh,lw))
+            features = vision.encode(device_patches, image,
+                                     vision.outputs[slot, offset:offset+length])
             spans.append((start, features))
+            offset += length
         self.pending_spans = spans
-        return None
 
     def command(self, op=None, arg=0, ids=(), temp_milli=0, *, tokens=None, images=None):
         """One header collective, followed by the operation's ordered payload/work."""
@@ -545,17 +542,25 @@ class Engine:
         for rid in ids:
             self.close_row(self.rows[rid])
             del self.rows[rid]
+            self.reservations.pop(rid, None)
 
     def admit(self, tokens, max_new, *, emit=None, cancel=None,
               queue_seconds=0.0, temperature=0.0, images=None):
-        limit = self.validate_request(tokens, max_new, temperature)
-        if images:
-            from server.image_input import validate_payload
-            images = validate_payload(list(tokens), images)['images']
+        # Only this CPU-only preflight may reject a request and keep serving.
+        try:
+            limit = self.validate_request(tokens, max_new, temperature)
+            images = prepare_images(tokens, images)
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
+            raise RequestRejected(str(exc)) from exc
+        page = self.past.page_tokens
+        pages = (len(tokens) + limit + Q + page - 1) // page
+        if sum(self.reservations.values()) + pages > self.past.pt.n_pages:
+            raise RequestBusy('waiting for KV page capacity')
         t0 = time.perf_counter()
         rid, self.next_id = self.next_id, self.next_id + 1
+        self.reservations[rid] = pages
         if images:
-            self.command(OP_IMAGE, len(images), images=images)
+            self.command(OP_IMAGE, len(images.records), images=images.records)
         row = self.command(OP_OPEN, len(tokens), (rid,),
                            int(round(float(temperature)*1000)), tokens=tokens)
         lane = Lane(rid, row, self.eos_id, limit, emit=emit, cancel=cancel,
@@ -632,6 +637,32 @@ class Job:
     temperature: float = 0.0
     images: object = None
     submitted_at: float = field(default_factory=time.perf_counter)
+
+
+class RequestRejected(ValueError):
+    """CPU preflight failed; no device work or collective was published."""
+
+
+class RequestBusy(Exception):
+    """Valid request waits until live rows release reserved physical pages."""
+
+
+@dataclass(frozen=True)
+class PreparedImages:
+    records: tuple
+
+
+def prepare_images(tokens, payload):
+    from server.image_input import IMAGE_ID, validate_payload, patchify
+    if isinstance(payload, PreparedImages):
+        return payload
+    if payload is None:
+        if IMAGE_ID in tokens:
+            raise ValueError('image placeholder without an image')
+        return None
+    import copy
+    images = validate_payload(tokens, copy.deepcopy(payload))['images']
+    return PreparedImages(tuple(dict(im, patches=patchify(im)) for im in images))
 
 
 class RequestTooLong(ValueError):
@@ -743,8 +774,11 @@ class QueueStrategy:
         self.lock, self.failure = threading.Lock(), None
 
     def query(self, input_ids, max_new_tokens, temperature=1.0, images=None):
+        if not isinstance(input_ids, (list, tuple)):
+            raise ValueError('input_ids must be a list')
         ids = list(input_ids)
         self.eng.validate_request(ids, max_new_tokens, temperature)
+        images = prepare_images(ids, images)
         with self.lock:
             if self.failure is not None:
                 raise RuntimeError('generation worker failed') from self.failure
@@ -841,11 +875,17 @@ def drive(eng, jobs, max_batch=4):
                         # Keep FIFO head until active decode drains; no cache DMA yet.
                         if lanes and eng.uncached_tokens(job.tokens, job.images) > 128*1024:
                             break
-                        lanes.append(eng.admit(job.tokens, job.max_new,
-                            temperature=job.temperature, images=job.images,
-                            emit=job.out.put,
-                            cancel=job.out.cancel_handle.flag,
-                            queue_seconds=time.perf_counter()-job.submitted_at))
+                        try:
+                            lane = eng.admit(job.tokens, job.max_new,
+                                temperature=job.temperature, images=job.images,
+                                emit=job.out.put, cancel=job.out.cancel_handle.flag,
+                                queue_seconds=time.perf_counter()-job.submitted_at)
+                        except RequestBusy:
+                            break
+                        except RequestRejected as exc:
+                            job.out.put({'type': 'error', 'error': str(exc)})
+                        else:
+                            lanes.append(lane)
                     boarding.pop(0)
                 if len(lanes) > len(aboard):
                     shut = time.perf_counter()
@@ -884,7 +924,7 @@ def drive(eng, jobs, max_batch=4):
         raise
 
 
-# Fixed deployment geometry: 8K chunks, 512K context, 2M physical KV pool.
+# Fixed deployment geometry: 8K chunks, 1M context, 2M physical KV pool.
 CACHE_ROOT = '/dev/shm/ljqinfer_dsv41f_tp8/wcache_nz_v3'
 MODEL_ROOT = '/data/models/DeepSeek-V4.1-Flash'
 POOL_TOKENS, SLOTS, MAX_SEQ = 2 << 20, 4, 1 << 20
@@ -1018,19 +1058,32 @@ def bootstrap():
             torch.npu.synchronize()
             ops.bind_workspace(scratch)
             eng.prefill_workspace = scratch
+            from model.cold import RestoreWorkspace
+            eng.restore_workspace = RestoreWorkspace(eng.past, eng.weights.device)
+            from model.vision_runtime import load_vision
+            eng.vision = load_vision(VISION_ROOT, eng.weights.device, world=dist.get_world_size(),
+                                     rank=rank).allocate_buffers(SLOTS)
             del scratch
+            # Measure eager vision while all persistent input/output buffers exist.
+            # Release only cached allocations here, before any graph capture.
             torch.npu.synchronize()
+            torch.npu.reset_peak_memory_stats()
+            vision_base = torch.npu.memory_allocated()
+            eng.vision.warmup()
+            vision_peak = torch.npu.max_memory_allocated() - vision_base
+            vision_reserve = int(vision_peak) + (256 << 20)
+            torch.npu.empty_cache()
             free, total = torch.npu.mem_get_info()
-            # Actual remaining HBM AFTER weights/Past/prefill workspace, with
-            # the lowest rank's budget shared explicitly over the CPU group.
-            budget = torch.tensor([int(free) - DECODE_RESERVE_BYTES],
+            # Account for vision separately from native/graph safety headroom.
+            reserve = DECODE_RESERVE_BYTES + vision_reserve
+            budget = torch.tensor([int(free) - reserve],
                                   dtype=torch.int64, device='cpu')
             dist.all_reduce(budget, op=dist.ReduceOp.MIN, group=ctrl)
             budget_bytes = int(budget.item())
             if budget_bytes <= 0:
                 raise MemoryError('no decode tensor budget after prefill and explicit reserve')
             print(f'BOOT_MEMORY rank={rank} total={total} free_after_prefill={free} '
-                  f'decode_tensor_limit={budget_bytes} reserve={DECODE_RESERVE_BYTES} '
+                  f'decode_tensor_limit={budget_bytes} reserve={reserve} vision_peak={vision_peak} '
                   f'pool_tokens={POOL_TOKENS} slots={SLOTS} max_seq={MAX_SEQ} chunk={CHUNK}',
                   flush=True)
             eng.decode_compute = NativeDecode(eng.weights, eng.past,
@@ -1051,6 +1104,8 @@ def bootstrap():
             print(f'BOOT_PREFILL_READY rank={rank} '
                   f'allocated={torch.npu.memory_allocated()} '
                   f'reserved={torch.npu.memory_reserved()}', flush=True)
+            eng.vision.warmup()
+            print(f'BOOT_VISION_READY rank={rank}', flush=True)
             eng.bind_cold_cache(budget_bytes=cold_budget_bytes(), namespace=COLD_NAMESPACE)
             torch.npu.synchronize()
             free_after, _ = torch.npu.mem_get_info()

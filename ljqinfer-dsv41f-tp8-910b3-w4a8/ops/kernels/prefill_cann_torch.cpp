@@ -290,3 +290,58 @@ TORCH_LIBRARY_IMPL(ljq_prefill,PrivateUse1,m) {
     m.impl("matmul_fp32.out",matmul_fp32_out);
     m.impl("dynamic_quant",dynamic_quant);
 }
+
+// Own the index GEMM/score/TP sequence; preserve 32-row collective ordering.
+extern "C" void pa_score_reduce(void*,void*,void*,void*,void*,void*,int,int,int,int,int,int,int,int,float,int);
+namespace {
+Tensor score_tiles(const Tensor& q,const Tensor& bank,const Tensor& weights,const Tensor& pos,
+                   const Tensor& count,Tensor dot,Tensor scores,int64_t keys,int64_t ratio,
+                   double scale,int64_t tile,int64_t fnptr,int64_t commptr) {
+    TORCH_CHECK(q.dim()==3 && q.is_contiguous() && q.scalar_type()==at::kBFloat16 &&
+                bank.dim()==2 && bank.is_contiguous() && bank.scalar_type()==at::kBFloat16 &&
+                weights.is_contiguous() && weights.scalar_type()==at::kFloat &&
+                pos.is_contiguous() && pos.scalar_type()==at::kLong &&
+                count.scalar_type()==at::kLong && count.numel()==1 &&
+                dot.is_contiguous() && scores.is_contiguous() &&
+                dot.scalar_type()==at::kFloat && scores.scalar_type()==at::kFloat &&
+                q.device().type()==c10::DeviceType::PrivateUse1 &&
+                dot.dim()==2 && scores.dim()==2 && count.is_contiguous() &&
+                (tile==32 || tile==128) && fnptr && commptr,"index score contract");
+    const auto rows=q.size(0),heads=q.size(1),dim=q.size(2),width=bank.size(0);
+    TORCH_CHECK(rows>0 && rows<=INT32_MAX && heads>0 && heads<=INT32_MAX &&
+                width>0 && width<=INT32_MAX && keys>=0 && keys<=width &&
+                ratio>0 && ratio<=INT32_MAX && std::isfinite(scale),"index score geometry");
+    TORCH_CHECK(weights.sizes()==at::IntArrayRef({rows,heads}) && pos.numel()==rows &&
+                bank.size(1)==dim && scores.sizes()==at::IntArrayRef({rows,width}) &&
+                dot.size(0)>=std::min(tile,rows)*heads && dot.size(1)==width,
+                "index score extent mismatch");
+    for(const auto& x:{bank,weights,pos,count,dot,scores})
+        TORCH_CHECK(x.device()==q.device(),"index devices differ");
+    c10::DeviceGuard guard(q.device());
+    using Reduce=int(*)(void*,void*,uint64_t,int,int,void*,void*);
+    auto reduce=reinterpret_cast<Reduce>(fnptr);
+    auto comm=reinterpret_cast<void*>(commptr);
+    for(int64_t lo=0;lo<rows;lo+=tile) {
+        auto hi=std::min(lo+tile,rows),n=hi-lo;
+        auto block=dot.slice(0,0,n*heads);
+        matmul_fp32_out(q.slice(0,lo,hi).reshape({n*heads,dim}),bank.t(),block);
+        auto w=weights.slice(0,lo,hi),ps=pos.slice(0,lo,hi),out=scores.slice(0,lo,hi);
+        ljq::launch("ljq_index_score_tp",{block,w,ps,count,out},[=](void* stream) {
+            pa_score_reduce(stream,block.data_ptr(),w.data_ptr(),ps.data_ptr(),count.data_ptr(),
+                            out.data_ptr(),n,heads,keys,ratio,0,0,n,width,scale,20);
+            for(int64_t offset=0;offset<n;offset+=32) {
+                auto* ptr=out.data_ptr<float>()+offset*width;
+                auto size=std::min(int64_t(32),n-offset)*width;
+                auto status=reduce(ptr,ptr,size,4,0,comm,stream);
+                TORCH_CHECK(status==0,"index HCCL failed: ",status);
+            }
+            return 0;
+        });
+    }
+    return scores;
+}
+}
+TORCH_LIBRARY_FRAGMENT(ljq_prefill,m) {
+ m.def("score_tiles(Tensor q, Tensor bank, Tensor weight, Tensor positions, Tensor valid, Tensor(a!) dot, Tensor(b!) scores, int keys, int ratio, float scale, int tile, int function, int communicator) -> Tensor(b!)");
+}
+TORCH_LIBRARY_IMPL(ljq_prefill,PrivateUse1,m) {m.impl("score_tiles",score_tiles);}

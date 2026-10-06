@@ -1,16 +1,26 @@
 """Residual block and TP Engram, driven exclusively by the incoming rows."""
 import torch
+from functools import partial
 from ops.prefill import residual as r
 from model.engram import EngramRows
 from model.prefill_linears import projection
 from model.prefill_layer import PrefillAttention
 from ops.prefill.moe import PrefillMoE
+from ops.prefill.hc import hc_prepare, hc_finish
+from ops.prefill.engram import engram_apply
 
 
 class PrefillBlock:
     def __init__(self, layer, config, weights, parallel, hasher=None, tables=None, library=None):
         self.layer, self.c, self.w = layer, config, weights
         self.p = f'layers.{layer}'
+        self.hc = {name: partial(hc_prepare,
+            fn=weights[f'{self.p}.hc_{name}_fn'],
+            scale=weights[f'{self.p}.hc_{name}_scale'],
+            base=weights[f'{self.p}.hc_{name}_base'],
+            norm_weight=weights[f'{self.p}.{name}_norm.weight'],
+            norm_eps=config['norm_eps'], hc_eps=config['hc_eps'],
+            iters=config['hc_sinkhorn_iters']) for name in ('attn', 'ffn')}
         self.attention = PrefillAttention(layer, config, weights, parallel, library)
         self.ffn = PrefillMoE(layer, config, weights, self.attention.lin, parallel)
         self.engram = (PrefillEngram(layer, config, weights, parallel, hasher, tables[layer])
@@ -26,12 +36,10 @@ class PrefillBlock:
 
     def __call__(self, h, pre, state):
         # The generated PRE gates the NEXT sublayer, not the producer itself.
-        apre, post, comb = self.mix(h, 'attn')
-        y = self.attention(self.norm(h, pre, 'attn'), state)
-        h = r.expand(y, h, post, comb)
-        fpre, post, comb = self.mix(h, 'ffn')
-        y = self.ffn(self.norm(h, apre, 'ffn'))
-        return r.expand(y, h, post, comb), fpre
+        x, apre, post, comb = self.hc['attn'](h, pre)
+        h = hc_finish(self.attention(x, state), h, post, comb)
+        x, fpre, post, comb = self.hc['ffn'](h, apre)
+        return hc_finish(self.ffn(x), h, post, comb), fpre
 
 
 class PrefillEngram:
@@ -41,21 +49,11 @@ class PrefillEngram:
         self.rows = EngramRows(hasher, layer, table, rank=parallel.rank)
         self.p, self.c, self.w = f'layers.{layer}.engram', config, weights
         self.parallel = parallel
+        self.project = partial(projection, weights, self.p+'.wkv')
+        self.weight = weights[self.p+'.q_weight'].float() * weights[self.p+'.k_weight'].float()
+        self.rotation = weights['engram.rotation'].float()
 
     def __call__(self, h, prepared, workspace):
-        p, w, par = self.p, self.w, self.parallel
-        live, copies, dim = h.shape
-        share = (live+par.world-1)//par.world
-        send, kv, bkv, local, gathered = workspace.views(h)
-        send[live:].zero_()
-        send[:live].copy_(projection(w, p+'.wkv', prepared))
-        par.scatter(send, out=kv)
-        lo, hi = min(par.rank*share, live), min((par.rank+1)*share, live)
-        local[hi-lo:].zero_()
-        local[:hi-lo].copy_(h[lo:hi])
-        weight = w[p+'.q_weight'].float() * w[p+'.k_weight'].float()
-        bkv.copy_(kv)
-        gated = r.engram_gate(local, bkv, weight,
-                             w['engram.rotation'].float(), self.c['norm_eps'])
-        par.logits(gated, out=gathered)
-        return gathered[:live].contiguous()
+        return engram_apply(h, prepared, project=self.project,
+            weight=self.weight, rotation=self.rotation, eps=self.c['norm_eps'],
+            comm=self.parallel, workspace=workspace)

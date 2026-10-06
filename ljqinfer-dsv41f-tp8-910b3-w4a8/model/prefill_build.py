@@ -64,6 +64,13 @@ class PrefillParallel:
             raise ValueError('HCCL requires a contiguous rank-local device buffer')
         return {torch.float16: 3, torch.float32: 4, torch.bfloat16: 11}[tensor.dtype]
 
+    def index_scores(self, q, bank, weight, positions, valid, dot, scores, keys, ratio, scale, tile):
+        """Borrow this communicator for the ordered native index scoring operator."""
+        from ops.prefill.native import ops
+        return ops.score_tiles(q, bank, weight, positions, valid, dot, scores,
+                               keys, ratio, scale, tile,
+                               C.cast(self.lib.HcclAllReduce, C.c_void_p).value, self.comm.value)
+
     def sum(self, tensor):
         dtype = self._buffer(tensor)
         self._call('HcclAllReduce', tensor.data_ptr(), tensor.data_ptr(),

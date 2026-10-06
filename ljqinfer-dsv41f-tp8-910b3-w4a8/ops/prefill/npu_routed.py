@@ -2,7 +2,7 @@
 import torch
 import torch_npu
 from ops.prefill import residual as r
-from ops.prefill.w4a8 import linear
+from ops.prefill.moe_units import dispatch_quant, grouped_linear_activation, grouped_linear_combine
 
 
 class PackedRouted:
@@ -25,32 +25,13 @@ class PackedRouted:
         inter = w[p+'.w13.scale'].shape[1] // 2
         if (dim, inter) != (5120, 288):
             raise ValueError('released routed kernels require D5120/I288')
-        # Token-major stable expert order matches the released combine ABI.
-        if experts > 2**24:
-            raise ValueError('expert IDs exceed exact FP32 sort range')
-        order = ids.flatten().float().argsort(stable=True)
-        sorted_ids = ids.flatten()[order]
-        # Quantize each token once, then dispatch INT8 rows and their scales.
-        raw, token_scale = r.native.dynamic_quant(x)
-        rows = order // self.topk
-        quantized = raw[rows].contiguous()
-        token_scale = token_scale[rows].contiguous()
-        counts = torch.zeros(experts, dtype=torch.int64, device=x.device)
-        counts.scatter_add_(0, sorted_ids, torch.ones_like(sorted_ids))
-        hidden = r.native.grouped_int4(
-            quantized, w[p+'.w13.weight'], self.scales['w13'],
-            w[p+'.w13.hp_bias'], token_scale, counts).to(torch.bfloat16)
+        quantized, token_scale, counts, order = dispatch_quant(x, ids, experts=experts)
         sorted_prob = probabilities.flatten()[order].contiguous()
-        gated = r.native.routed_swiglu(hidden, sorted_prob)
-        values = self.project('w2', gated, counts)
-        inverse = torch.empty_like(order)
-        inverse.scatter_(0, order, torch.arange(pairs, device=order.device))
-        result = r.native.routed_combine(values, inverse)
+        quantized, token_scale = grouped_linear_activation(
+            quantized, w[p+'.w13.weight'], self.scales['w13'],
+            w[p+'.w13.hp_bias'], token_scale, counts, sorted_prob,
+            padded_dim=w[p+'.w2.weight'].shape[1])
+        result = grouped_linear_combine(quantized, w[p+'.w2.weight'], self.scales['w2'],
+                                        w[p+'.w2.hp_bias'], token_scale, counts, order)
         self.parallel.sum(result)
         return result
-
-    def project(self, tag, x, counts):
-        key = self.p+'.'+tag
-        # HP GMM returns FP16, but the released activation/combine read BF16.
-        return linear(x, self.w[key+'.weight'], self.scales[tag],
-                      self.w[key+'.hp_bias'], counts).to(torch.bfloat16)

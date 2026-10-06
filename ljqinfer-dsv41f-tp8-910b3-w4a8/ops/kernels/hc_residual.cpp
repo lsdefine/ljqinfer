@@ -287,7 +287,8 @@ extern "C" int pre_hc_sinkhorn_launch(void* stream, void* comb, uint32_t T, uint
 // Routed SwiGLU: BF16 [rows, 2*288], FP32 probability [rows], BF16 out.
 // Tile geometry and limit are fixed by the released TP8 build. No GM scratch.
 constexpr uint32_t K = 288, R = 16, N = R*K;
-extern "C" __global__ __aicore__ void routed_swiglu(
+template<class Input, bool RoundHalf>
+__global__ __aicore__ void routed_swiglu_kernel(
         GM_ADDR hidden, GM_ADDR probability, GM_ADDR output, uint32_t rows) {
     TPipe pipe;
     TBuf<TPosition::VECCALC> bg, bu, bf, bv, bt, bp;
@@ -297,9 +298,9 @@ extern "C" __global__ __aicore__ void routed_swiglu(
     auto gate = bg.Get<bfloat16_t>(); auto up = bu.Get<bfloat16_t>();
     auto g = bf.Get<float>(); auto u = bv.Get<float>();
     auto tmp = bt.Get<float>(); auto prob = bp.Get<float>();
-    GlobalTensor<bfloat16_t> h, y;
+    GlobalTensor<Input> h; GlobalTensor<bfloat16_t> y;
     GlobalTensor<float> p;
-    h.SetGlobalBuffer((__gm__ bfloat16_t*)hidden);
+    h.SetGlobalBuffer((__gm__ Input*)hidden);
     p.SetGlobalBuffer((__gm__ float*)probability);
     y.SetGlobalBuffer((__gm__ bfloat16_t*)output);
     // AIV has two subcores for each launched block on 910B.
@@ -308,11 +309,19 @@ extern "C" __global__ __aicore__ void routed_swiglu(
         const uint16_t active = min(uint32_t(R), rows-uint32_t(row));
         const int32_t count = active*K;
         DataCopyParams cp{active, K/16, K/16, 0};
-        DataCopy(gate, h[row*2*K], cp);
-        DataCopy(up, h[row*2*K+K], cp);
+        DataCopy(gate.ReinterpretCast<Input>(), h[row*2*K], cp);
+        DataCopy(up.ReinterpretCast<Input>(), h[row*2*K+K], cp);
         DataCopyPad(prob, p[row], DataCopyExtParams{1, uint32_t(active)*4, 0, 0, 0},
                     DataCopyPadExtParams<float>{false, 0, 0, 0});
         PipeBarrier<PIPE_ALL>();
+        if constexpr (RoundHalf) {
+            Cast(g, gate.ReinterpretCast<half>(), RoundMode::CAST_NONE, count);
+            Cast(u, up.ReinterpretCast<half>(), RoundMode::CAST_NONE, count);
+            PipeBarrier<PIPE_V>();
+            Cast(gate, g, RoundMode::CAST_RINT, count);
+            Cast(up, u, RoundMode::CAST_RINT, count);
+            PipeBarrier<PIPE_V>();
+        }
         Cast(g, gate, RoundMode::CAST_NONE, count);
         Cast(u, up, RoundMode::CAST_NONE, count);
         PipeBarrier<PIPE_V>();
@@ -341,21 +350,27 @@ extern "C" __global__ __aicore__ void routed_swiglu(
 }
 extern "C" void routed_swiglu_launch(uint32_t blocks, void* stream,
         uint8_t* h, uint8_t* p, uint8_t* y, uint32_t rows) {
-    routed_swiglu<<<blocks, nullptr, stream>>>(h, p, y, rows);
+    routed_swiglu_kernel<bfloat16_t,false><<<blocks, nullptr, stream>>>(h, p, y, rows);
+}
+extern "C" void routed_swiglu_half_launch(uint32_t blocks, void* stream,
+        uint8_t* h, uint8_t* p, uint8_t* y, uint32_t rows) {
+    routed_swiglu_kernel<half,true><<<blocks, nullptr, stream>>>(h,p,y,rows);
 }
 
 constexpr int32_t CD=5120, CK=6, CT=2560;
-extern "C" __global__ __aicore__ void routed_combine(
+template<class Input, bool RoundHalf>
+__global__ __aicore__ void routed_combine_kernel(
         GM_ADDR values, GM_ADDR inverse, GM_ADDR output, uint32_t tokens) {
     TPipe pipe;
-    TBuf<TPosition::VECCALC> bi, bx, bf, ba;
+    TBuf<TPosition::VECCALC> bi, bx, bf, ba, br;
+    if constexpr (RoundHalf) pipe.InitBuffer(br, CK*CT*2);
     pipe.InitBuffer(bi, 64); pipe.InitBuffer(bx, CK*CT*2);
     pipe.InitBuffer(bf, CK*CT*4); pipe.InitBuffer(ba, CT*4);
-    auto idx=bi.Get<int64_t>(); auto x=bx.Get<bfloat16_t>();
+    auto idx=bi.Get<int64_t>(); auto x=bx.Get<Input>();
     auto f=bf.Get<float>(); auto acc=ba.Get<float>();
-    GlobalTensor<int64_t> inv; GlobalTensor<bfloat16_t> y; GlobalTensor<float> out;
+    GlobalTensor<int64_t> inv; GlobalTensor<Input> y; GlobalTensor<float> out;
     inv.SetGlobalBuffer((__gm__ int64_t*)inverse);
-    y.SetGlobalBuffer((__gm__ bfloat16_t*)values);
+    y.SetGlobalBuffer((__gm__ Input*)values);
     out.SetGlobalBuffer((__gm__ float*)output);
     for (uint32_t tile=GetBlockIdx(); tile<tokens*2; tile+=GetBlockNum()*2) {
         const uint32_t token=tile/2, col=(tile%2)*CT;
@@ -373,6 +388,14 @@ extern "C" __global__ __aicore__ void routed_combine(
             DataCopy(x[j*CT], y[uint64_t(rows[j])*CD+col], CT);
         PipeBarrier<PIPE_ALL>();
         Cast(f,x,RoundMode::CAST_NONE,CK*CT);
+        if constexpr (RoundHalf) {
+            // Match GMM FP16 -> BF16 -> FP32 without a BF16 GM intermediate.
+            auto rounded=br.Get<bfloat16_t>();
+            PipeBarrier<PIPE_V>();
+            Cast(rounded,f,RoundMode::CAST_RINT,CK*CT);
+            PipeBarrier<PIPE_V>();
+            Cast(f,rounded,RoundMode::CAST_NONE,CK*CT);
+        }
         PipeBarrier<PIPE_V>();
         Adds(acc,f,0.0f,CT);
         PipeBarrier<PIPE_V>();
@@ -387,7 +410,11 @@ extern "C" __global__ __aicore__ void routed_combine(
 }
 extern "C" void routed_combine_launch(uint32_t blocks, void* stream,
         uint8_t* y, uint8_t* inverse, uint8_t* out, uint32_t tokens) {
-    routed_combine<<<blocks,nullptr,stream>>>(y,inverse,out,tokens);
+    routed_combine_kernel<bfloat16_t, false><<<blocks,nullptr,stream>>>(y,inverse,out,tokens);
+}
+extern "C" void routed_combine_half_launch(uint32_t blocks, void* stream,
+        uint8_t* y, uint8_t* inverse, uint8_t* out, uint32_t tokens) {
+    routed_combine_kernel<half, true><<<blocks,nullptr,stream>>>(y,inverse,out,tokens);
 }
 
 constexpr uint32_t RMS_D=5120;

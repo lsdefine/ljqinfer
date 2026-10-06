@@ -1,6 +1,6 @@
 """Call-local Past adapter. No private persistent KV, frame or bound plan."""
 import torch
-from ops.prefill import attention as a
+from ops.prefill.attention_units import index_select, sparse_attention
 
 
 class AttentionState:
@@ -63,14 +63,14 @@ class AttentionState:
                 kwargs = dict(ratio=view.ratio, total_heads=total_heads,
                               parallel=parallel, library=self.library, workspace=self.index_workspace)
                 if self.phase == 'ced' and view.mode == 'full':
-                    self.candidates, selected = a.select(
+                    self.candidates, selected = index_select(
                         iq, iw, index, pos, valid, topk=topk, make_candidates=True, **kwargs)
                 else:
-                    selected = a.select(iq, iw, index, pos, valid, topk=topk,
+                    selected = index_select(iq, iw, index, pos, valid, topk=topk,
                                         candidates=self.candidates, **kwargs)
                 self.selections[view.index_source_layer] = selected
             selected = self.selections[view.index_source_layer]
-        out = a.attend(q, local, bank, selected, pos, meta, sink,
+        out = sparse_attention(q, local, bank, selected, pos, meta, sink,
                        ratio=view.ratio, library=self.library)
         lo = max(0, len(kv)-window.window, -self.start)
         window.write(slot, self.start+lo, kv[lo:])

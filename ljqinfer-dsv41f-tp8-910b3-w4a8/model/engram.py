@@ -179,6 +179,36 @@ class EngramHash:
         return torch.cat(hashes,-1) + self.offsets
 
 
+    def selected_ids(self, layer, rank, tokens, *, start, history_tokens=()):
+        """Compute only this layer's selected hash columns; raw history stays explicit."""
+        n = self.layout.max_ngram_size
+        if start < 0 or len(history_tokens) != min(start, n - 1):
+            raise ValueError('exact raw token history required before chunk')
+        if rank is not None and (not 0 <= rank < 8):
+            raise ValueError('invalid rank')
+        raw = torch.tensor(tuple(history_tokens) + tuple(tokens), dtype=torch.int64)
+        if raw.numel() and (raw.min() < 0 or raw.max() >= len(self.token_map)):
+            raise ValueError('token outside vocabulary')
+        source = self.token_map[raw]
+        pos = torch.arange(len(tokens)) + len(history_tokens)
+        blocked = torch.zeros(len(tokens), dtype=torch.bool)
+        rolling = None
+        parts = []
+        heads = self.layout.n_heads
+        low, high = (0, (n - 1) * heads) if rank is None else (rank * 3, (rank + 1) * 3)
+        for shift in range(n):
+            value = source[(pos - shift).clamp_min(0)]
+            blocked |= (pos < shift) | (value == -1)
+            prod = torch.where(blocked, self.pad_id, value) * self.multipliers[layer, shift]
+            rolling = prod if rolling is None else torch.bitwise_xor(rolling, prod)
+            if shift:
+                a, b = (max(low, (shift - 1) * heads), min(high, shift * heads))
+                if a < b:
+                    primes = self.primes[layer, shift - 1, a - (shift - 1) * heads:b - (shift - 1) * heads]
+                    parts.append(rolling[:, None] % primes + self.offsets[layer, a:b])
+        return torch.cat(parts, -1)
+
+
 class EngramRows:
     """Bind one layer's host table to hash->gather->dequantize; no hidden state."""
     def __init__(self, hasher, layer, table, *, rank=None):
@@ -186,7 +216,7 @@ class EngramRows:
         self.layer = hasher.layout.layer_ids.index(layer)
 
     def __call__(self, slot, start, tokens, history_tokens=()):
-        ids = self.hasher(tokens,start=start,history_tokens=history_tokens)[:,self.layer]
-        values, scales = self.table.gather(ids,rank=self.rank)
-        return (values.float().unflatten(-1,(-1,32)) *
-                scales[...,None]).flatten(-2).to(torch.bfloat16)
+        from ops.prefill.host_engram import gather
+        ids = self.hasher.selected_ids(self.layer, self.rank, tokens,
+            start=start, history_tokens=history_tokens)
+        return gather(self.table.weight, self.table.scale, ids)

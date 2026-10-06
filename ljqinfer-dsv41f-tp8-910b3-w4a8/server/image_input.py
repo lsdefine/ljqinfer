@@ -25,6 +25,8 @@ def decode_record(record):
     if not isinstance(record, dict):
         raise ValueError('image must be an object')
     source = record.get('source', record)
+    if not isinstance(source, dict):
+        raise ValueError('image source must be an object')
     url = record.get('url') or source.get('url')
     if url is not None:
         if not isinstance(url, str) or not url.startswith('data:image/'):
@@ -124,6 +126,8 @@ def validate_payload(ids, payload):
         raise ValueError('invalid image count')
     end, total, raw_bytes = 0, 0, 0
     for im in images:
+        if not isinstance(im, dict):
+            raise ValueError('image must be an object')
         start, length = im.get('start'), im.get('length')
         if type(start) is not int or type(length) is not int or start < end or length < 4 or start+length > len(ids):
             raise ValueError('invalid image span')

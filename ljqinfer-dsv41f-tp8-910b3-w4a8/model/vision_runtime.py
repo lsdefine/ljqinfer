@@ -92,15 +92,37 @@ class VisionRuntime:
         self.vision, self.aligner, self.delimiters, self.device = vision, aligner, delimiters, device
 
     @torch.inference_mode()
-    def encode(self, patches, image):
+    def encode(self, patches, image, out):
         nh, nw = image['grid']
         features = self.aligner(self.vision(patches, nh, nw), nh, nw)
         h, w = image['llm_grid']
         if features.shape[0] != h*w:
             raise ValueError('aligner output grid mismatch')
-        span = torch.empty((image['length'], features.shape[-1]), device=self.device, dtype=torch.bfloat16)
+        span = out[:image['length']]
+        if span.shape != (image['length'], features.shape[-1]):
+            raise RuntimeError('vision output exceeds its reserved slot')
         span[0], span[-1] = self.delimiters['start'], self.delimiters['end']
         rows = span[1:-1].view(h,w+1,-1)
         rows[:,:w] = features.view(h,w,-1)
         rows[:,w] = self.delimiters['newline']
         return span
+
+    def allocate_buffers(self, slots):
+        from server.image_input import MAX_VISION_TOKENS
+        self.max_patches = (1024 - 3) * 9
+        self.meta = torch.empty(8, dtype=torch.int64)
+        self.patch_host = torch.empty((self.max_patches, 588), dtype=torch.float32)
+        self.patch_device = torch.empty_like(self.patch_host, device=self.device, dtype=torch.bfloat16)
+        dim = self.delimiters['start'].numel()
+        self.outputs = torch.empty((slots, MAX_VISION_TOKENS, dim), device=self.device,
+                                   dtype=torch.bfloat16)
+        return self
+
+    @torch.inference_mode()
+    def warmup(self):
+        self.patch_device.zero_()
+        for gh, gw in ((3, 3063), (93, 93)):
+            lh, lw = (gh+2)//3, (gw+2)//3
+            im = dict(grid=(gh, gw), llm_grid=(lh, lw), length=lh*(lw+1)+2)
+            self.encode(self.patch_device[:gh*gw], im, self.outputs[0])
+        torch.npu.synchronize()

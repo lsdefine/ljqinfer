@@ -39,8 +39,8 @@ def generate(body: dict):
     try:
         request_id = str(body["request_id"])
         input_ids = body["input_ids"]
-        max_new = int(body["max_new_tokens"])
-        temperature = float(body.get("temperature", 0.0))
+        max_new = body["max_new_tokens"]
+        temperature = body.get("temperature", 0.0)
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(400, "invalid request: %s" % exc)
     # query only validates/enqueues CPU work. Serialize it with registration so

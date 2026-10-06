@@ -11,9 +11,11 @@ extern "C" {
 int pre_hc_collapse_launch(void*,void*,void*,void*,uint32_t,uint32_t,uint32_t,uint32_t);
 int pre_hc_expand_launch(void*,void*,void*,void*,void*,void*,uint32_t,uint32_t,uint32_t,uint32_t);
 int pre_hc_cast_stats_launch(void*,void*,void*,void*,uint32_t,float);
+int pre_moe_finish_launch(void*,void*,void*,void*,uint32_t);
 int pre_hc_sinkhorn_launch(void*,void*,uint32_t,uint32_t,uint32_t,uint32_t);
 void routed_swiglu_launch(uint32_t,void*,uint8_t*,uint8_t*,uint8_t*,uint32_t);
 void routed_combine_launch(uint32_t,void*,uint8_t*,uint8_t*,uint8_t*,uint32_t);
+void routed_combine_half_launch(uint32_t,void*,uint8_t*,uint8_t*,uint8_t*,uint32_t);
 }
 
 namespace {
@@ -39,7 +41,7 @@ Tensor collapse(const Tensor& input,const Tensor& pre) {
     auto x=input.contiguous(), p=pre.contiguous();
     auto out=at::empty({x.size(0),x.size(2)},x.options());
     if(x.size(0)) launch("ljq_hc_collapse",{x,p,out},[=](void* s){
-        return pre_hc_collapse_launch(s,x.data_ptr(),p.data_ptr(),out.data_ptr(),x.size(0),4,x.size(2),24);
+        return pre_hc_collapse_launch(s,x.data_ptr(),p.data_ptr(),out.data_ptr(),x.size(0),4,x.size(2),x.size(0)>=8192 ? 40 : 24);
     });
     return out;
 }
@@ -54,7 +56,7 @@ Tensor expand(const Tensor& input,const Tensor& residual,const Tensor& post,cons
     auto x=input.contiguous(), r=residual.contiguous(), p=post.contiguous(), c=comb.contiguous();
     auto out=at::empty(r.sizes(),r.options());
     if(t) launch("ljq_hc_expand",{x,r,p,c,out},[=](void* s){
-        return pre_hc_expand_launch(s,x.data_ptr(),r.data_ptr(),p.data_ptr(),c.data_ptr(),out.data_ptr(),t,4,d,24);
+        return pre_hc_expand_launch(s,x.data_ptr(),r.data_ptr(),p.data_ptr(),c.data_ptr(),out.data_ptr(),t,4,d,t >= 2048 ? 20 : 24);
     });
     return out;
 }
@@ -84,19 +86,36 @@ Tensor sinkhorn(const Tensor& input,int64_t iters) {
     });
     return buf.slice(2,0,t).permute({2,0,1}).contiguous();
 }
+at::Tensor moe_finish(const at::Tensor& a,const at::Tensor& b) {
+ TORCH_CHECK(a.device().type()==c10::DeviceType::PrivateUse1 && a.device()==b.device(),"device");
+ TORCH_CHECK(a.scalar_type()==at::kFloat && b.scalar_type()==at::kFloat,"dtype");
+ TORCH_CHECK(a.dim()==2 && a.size(1)==5120 && a.sizes()==b.sizes(),"shape");
+ TORCH_CHECK(a.size(0)<=UINT32_MAX,"rows");
+ c10::DeviceGuard guard(a.device());
+ auto x=a.contiguous(),y=b.contiguous();
+ auto out=at::empty(a.sizes(),a.options().dtype(at::kBFloat16));
+ if(a.size(0)) ljq::launch("ljq_moe_finish",{x,y,out},[=](void* s){
+  return pre_moe_finish_launch(s,x.data_ptr(),y.data_ptr(),out.data_ptr(),x.size(0));
+ });
+ return out;
+}
+extern "C" void routed_swiglu_half_launch(uint32_t,void*,uint8_t*,uint8_t*,uint8_t*,uint32_t);
 Tensor routed_swiglu(const Tensor& input,const Tensor& probability) {
-    check(input,at::kBFloat16,input); check(probability,at::kFloat,input);
+    TORCH_CHECK(input.scalar_type()==at::kHalf || input.scalar_type()==at::kBFloat16,"routed SwiGLU expects FP16/BF16");
+    check(input,input.scalar_type(),input); check(probability,at::kFloat,input);
     TORCH_CHECK(input.dim()==2 && input.size(1)==576 && probability.numel()==input.size(0),"routed SwiGLU shape mismatch");
     c10::DeviceGuard guard(input.device());
     auto x=input.contiguous(), p=probability.contiguous();
-    auto out=at::empty({x.size(0),288},x.options());
+    auto out=at::empty({x.size(0),288},x.options().dtype(at::kBFloat16));
     if(x.size(0)) launch("ljq_routed_swiglu",{x,p,out},[=](void* s){
-        routed_swiglu_launch(20,s,(uint8_t*)x.data_ptr(),(uint8_t*)p.data_ptr(),(uint8_t*)out.data_ptr(),x.size(0));return 0;
+        auto kernel=x.scalar_type()==at::kHalf ? routed_swiglu_half_launch : routed_swiglu_launch;
+        kernel(20,s,(uint8_t*)x.data_ptr(),(uint8_t*)p.data_ptr(),(uint8_t*)out.data_ptr(),x.size(0));return 0;
     });
     return out;
 }
-Tensor routed_combine(const Tensor& input,const Tensor& inverse) {
-    check(input,at::kBFloat16,input); check(inverse,at::kLong,input);
+template<bool HalfInput>
+Tensor routed_combine_typed(const Tensor& input,const Tensor& inverse) {
+    check(input,HalfInput ? at::kHalf : at::kBFloat16,input); check(inverse,at::kLong,input);
     TORCH_CHECK(input.dim()==2 && input.size(1)==5120 && inverse.dim()==1 &&
                 inverse.numel()%6==0 && inverse.numel()==input.size(0),
                 "routed combine requires INT64[6*T] inverse permutation");
@@ -104,7 +123,7 @@ Tensor routed_combine(const Tensor& input,const Tensor& inverse) {
     auto x=input.contiguous(), idx=inverse.contiguous();
     auto out=at::empty({idx.numel()/6,5120},x.options().dtype(at::kFloat));
     if(idx.numel()) launch("ljq_routed_combine",{x,idx,out},[=](void* s){
-        routed_combine_launch(20,s,(uint8_t*)x.data_ptr(),(uint8_t*)idx.data_ptr(),(uint8_t*)out.data_ptr(),idx.numel()/6);return 0;
+        (HalfInput ? routed_combine_half_launch : routed_combine_launch)(20,s,(uint8_t*)x.data_ptr(),(uint8_t*)idx.data_ptr(),(uint8_t*)out.data_ptr(),idx.numel()/6);return 0;
     });
     return out;
 }
@@ -116,9 +135,13 @@ TORCH_LIBRARY(ljq_prefill,m) {
     m.def("hc_sinkhorn(Tensor x, int iters) -> Tensor");
     m.def("routed_swiglu(Tensor x, Tensor probability) -> Tensor");
     m.def("routed_combine(Tensor x, Tensor inverse) -> Tensor");
+    m.def("routed_combine_half(Tensor x, Tensor inverse) -> Tensor");
+    m.def("moe_finish(Tensor routed, Tensor shared) -> Tensor");
 }
 TORCH_LIBRARY_IMPL(ljq_prefill,PrivateUse1,m) {
     m.impl("hc_collapse",collapse); m.impl("hc_expand",expand);
     m.impl("hc_cast_stats",cast_stats); m.impl("hc_sinkhorn",sinkhorn);
-    m.impl("routed_swiglu",routed_swiglu); m.impl("routed_combine",routed_combine);
+    m.impl("routed_swiglu",routed_swiglu); m.impl("routed_combine",routed_combine_typed<false>);
+    m.impl("routed_combine_half",routed_combine_typed<true>);
+    m.impl("moe_finish",moe_finish);
 }

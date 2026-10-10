@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from contextlib import contextmanager
 from model.checkpoint_weights import DeviceWeights
 from model.capacity import allocate_past
+from model.thinking import ThinkingBudget, validate_budget
 
 
 @dataclass(frozen=True)
@@ -345,7 +346,7 @@ class Engine:
             raise RequestTooLong('prompt leaves no Q6 headroom under row_cap=%d' % self.row_cap)
         return min(max_new, room)
 
-    def open_row(self, tokens, temp=0.0):
+    def open_row(self, tokens, temp=0.0, thinking_budget_tokens=None):
         import torch
         self.validate_request(tokens, 1, temp)
         dec, past = self._bound_decode(self.past), self.past
@@ -353,7 +354,8 @@ class Engine:
             raise RuntimeError('admission requires idle decode and a free slot')
         from model import prefill_trace
         prefill_trace.begin(self.rank, tokens)
-        row = Row(tokens=list(tokens), temp=float(temp))
+        row = Row(tokens=list(tokens), temp=float(temp),
+                  thinking=ThinkingBudget.from_prompt(tokens, thinking_budget_tokens))
         # Rank-0 stream spans, read after the existing final synchronization.
         # They include launch starvation, but exclude inter-chunk cold KV work.
         spans = []
@@ -389,6 +391,7 @@ class Engine:
                 row.encoder_seconds = sum(a.elapsed_time(b) for a, b in spans) / 1000
                 row.ced_seconds = ced_begin.elapsed_time(ced_end) / 1000
             row.first = row.anchor = self._first_token(output)
+            row.thinking.accept([row.first])
             self._seed_row(row, output)
             return row
         except BaseException as exc:
@@ -420,7 +423,8 @@ class Engine:
             # private stream. Publish them before proposal/verification reads.
             self._sync_rows()
             plan = dec.begin(slots=slots, temps=[r.temp for r in rows],
-                             history_tokens=[tuple(r.tokens[-3:]) for r in rows])
+                             history_tokens=[tuple(r.tokens[-3:]) for r in rows],
+                             thinking=[r.thinking for r in rows])
             # begin has already synchronized NativeDSpark's startup D2H buffer.
             # Token zero is the previously emitted anchor, NOT a new output.
             proposals = plan.host['tokens'].numpy().tolist()
@@ -442,7 +446,9 @@ class Engine:
                 n, anchor = receipt[2:4]
                 row.tokens.extend(ids[:n])  # committed history excludes new anchor
                 row.anchor = anchor
-                output.append(ids[1:n] + [anchor])
+                accepted = ids[1:n] + [anchor]
+                row.thinking.accept(accepted)
+                output.append(accepted)
             return output
         except BaseException as exc:
             self.failed = exc
@@ -500,7 +506,7 @@ class Engine:
             offset += length
         self.pending_spans = spans
 
-    def command(self, op=None, arg=0, ids=(), temp_milli=0, *, tokens=None, images=None):
+    def command(self, op=None, arg=0, ids=(), temp_milli=0, *, tokens=None, images=None, thinking_budget_tokens=0):
         """One header collective, followed by the operation's ordered payload/work."""
         import torch.distributed as dist
         ts = time.perf_counter()
@@ -508,12 +514,12 @@ class Engine:
             if self.rank != 0 or len(ids) > self.max_batch:
                 raise ValueError('rank zero publishes at most four rows')
             self.hdr.zero_()
-            self.hdr[:HEAD] = self.hdr.new_tensor((op, arg, len(ids), temp_milli))
+            self.hdr[:HEAD] = self.hdr.new_tensor((op, arg, len(ids), temp_milli, thinking_budget_tokens))
             for i, rid in enumerate(ids):
                 self.hdr[HEAD+i] = rid
         dist.broadcast(self.hdr, 0, group=self.ctrl)
         te = time.perf_counter()
-        op, arg, n, temp_milli = self.hdr[:HEAD].tolist()
+        op, arg, n, temp_milli, budget = self.hdr[:HEAD].tolist()
         if not 0 <= n <= self.max_batch:
             raise RuntimeError('invalid control header')
         ids = self.hdr[HEAD:HEAD+n].tolist()
@@ -530,7 +536,8 @@ class Engine:
             if tokens is not None:
                 buf.numpy()[:] = tokens
             dist.broadcast(buf, 0, group=self.ctrl)
-            row = self.open_row(buf.tolist(), temp=temp_milli/1000.0)
+            row = self.open_row(buf.tolist(), temp=temp_milli/1000.0,
+                                thinking_budget_tokens=budget)
             self.rows[ids[0]] = row
             return row
         if len(set(ids)) != len(ids) or any(i not in self.rows for i in ids):
@@ -545,10 +552,11 @@ class Engine:
             self.reservations.pop(rid, None)
 
     def admit(self, tokens, max_new, *, emit=None, cancel=None,
-              queue_seconds=0.0, temperature=0.0, images=None):
+              queue_seconds=0.0, temperature=0.0, images=None, thinking_budget_tokens=None):
         # Only this CPU-only preflight may reject a request and keep serving.
         try:
             limit = self.validate_request(tokens, max_new, temperature)
+            thinking_budget_tokens = validate_budget(thinking_budget_tokens)
             images = prepare_images(tokens, images)
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise RequestRejected(str(exc)) from exc
@@ -562,7 +570,8 @@ class Engine:
         if images:
             self.command(OP_IMAGE, len(images.records), images=images.records)
         row = self.command(OP_OPEN, len(tokens), (rid,),
-                           int(round(float(temperature)*1000)), tokens=tokens)
+                           int(round(float(temperature)*1000)), tokens=tokens,
+                           thinking_budget_tokens=thinking_budget_tokens)
         lane = Lane(rid, row, self.eos_id, limit, emit=emit, cancel=cancel,
                     queue_seconds=queue_seconds, prompt=len(tokens), t0=t0,
                     t1=time.perf_counter())
@@ -636,6 +645,7 @@ class Job:
     out: ResultQueue
     temperature: float = 0.0
     images: object = None
+    thinking_budget_tokens: int = 0
     submitted_at: float = field(default_factory=time.perf_counter)
 
 
@@ -675,7 +685,7 @@ OP_STOP, OP_OPEN, OP_STEP, OP_CLOSE, OP_IMAGE = 0, 1, 2, 3, 4
 COLD_METRICS = dict(stored_blocks='stored_blocks', stored_tokens='stored_tokens',
                     lookup_seconds='lookup_seconds', load_seconds='load_seconds',
                     store_seconds='store_seconds', store_drain_seconds='drain_seconds')
-HEAD, Q = 4, 6
+HEAD, Q = 5, 6
 BOARD_EVERY, BOARD_GRACE_S = 4, 0.003
 
 
@@ -686,6 +696,7 @@ class Row:
     first: int = -1
     anchor: int = -1
     temp: float = 0.0
+    thinking: ThinkingBudget = field(default_factory=ThinkingBudget)
     hit: int = 0
     lease: object = None
     encoder_seconds: float = 0.0
@@ -773,10 +784,11 @@ class QueueStrategy:
         self.eng, self.jobs = eng, jobs
         self.lock, self.failure = threading.Lock(), None
 
-    def query(self, input_ids, max_new_tokens, temperature=1.0, images=None):
+    def query(self, input_ids, max_new_tokens, temperature=1.0, images=None, thinking_budget_tokens=None):
         if not isinstance(input_ids, (list, tuple)):
             raise ValueError('input_ids must be a list')
         ids = list(input_ids)
+        thinking_budget_tokens = validate_budget(thinking_budget_tokens)
         self.eng.validate_request(ids, max_new_tokens, temperature)
         images = prepare_images(ids, images)
         with self.lock:
@@ -784,7 +796,8 @@ class QueueStrategy:
                 raise RuntimeError('generation worker failed') from self.failure
             out = ResultQueue(None, self.jobs.qsize())
             self.jobs.put(Job(ids, max_new_tokens, out,
-                              temperature=temperature, images=images))
+                              temperature=temperature, images=images,
+                              thinking_budget_tokens=thinking_budget_tokens))
         return out
 
     def fail(self, exc):
@@ -878,6 +891,7 @@ def drive(eng, jobs, max_batch=4):
                         try:
                             lane = eng.admit(job.tokens, job.max_new,
                                 temperature=job.temperature, images=job.images,
+                                thinking_budget_tokens=job.thinking_budget_tokens,
                                 emit=job.out.put, cancel=job.out.cancel_handle.flag,
                                 queue_seconds=time.perf_counter()-job.submitted_at)
                         except RequestBusy:

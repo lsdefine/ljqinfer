@@ -6107,3 +6107,45 @@ serve: restore A2-3 API port 8000 after official index validation
 
 Official prefill ba51fba now serving via TP8 engine. 5-minute mixed B1/B2/B4 streaming/nonstreaming API soak passed; 8k/36k/128k retrieval correct. 128k API model prefill 15.064s (~8698 tok/s), TTFT 15.987s. All eight rank PIDs unchanged, no fatal errors, external traffic HTTP200. Evidence /data/service_accept_8000/summary.json. Not a long-duration soak.
 ```
+
+---
+
+```text
+serve: isolate A2-3 development API on port 8001
+```
+
+---
+
+```text
+decode: fuse HC epilogues and KV preparation into independent leaves
+```
+
+---
+
+```text
+reports: measure steady decode context scaling and index attention leaves
+```
+
+---
+
+```text
+feat: ramp soft thinking end-token bias near explicit budget
+```
+
+---
+
+```text
+docs: keep soft thinking budget explanation inline
+```
+
+---
+
+```text
+fix: default thinking budget to 90 percent of effective output limit
+```
+
+---
+
+```text
+deploy: restore A2-3 frontend to port 8000
+```

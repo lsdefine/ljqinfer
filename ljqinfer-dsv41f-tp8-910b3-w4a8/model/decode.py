@@ -6,6 +6,8 @@ remain borrowed. All production verification uses startup-captured B1..B4 graphs
 import ctypes as C
 from pathlib import Path
 from model.decode_ops import native
+from ops.decode.hc_finish import hc_finish
+from ops.decode.kv_prepare import kv_prepare
 from ops.queued import queued
 
 P, U, F = C.c_void_p, C.c_uint32, C.c_float
@@ -362,7 +364,7 @@ class NativeDecode:
         self._idle()
         self.draft_state.pop(slot,None)
 
-    def begin(self, *, slots, history_tokens, temps=None):
+    def begin(self, *, slots, history_tokens, temps=None, thinking=None):
         """Generate Q6 internally, then prepare CPU Engram hashes for verify.
 
         The only token source is the captured NativeDSpark proposal graph.
@@ -404,7 +406,7 @@ class NativeDecode:
                    for row,receipt in zip(tokens,receipts)):
                 raise RuntimeError('NativeDSpark returned invalid Q6 IDs')
             with torch.npu.stream(self.stream):
-                p.stage(tokens,slots,starts,(1,)*p.batch,histories,temps=temps)
+                p.stage(tokens,slots,starts,(1,)*p.batch,histories,temps=temps,thinking=thinking)
             self.state = 'prepared'
         except BaseException:
             self.state = 'failed'
@@ -519,17 +521,21 @@ class DecodeBatch:
         # greedy kernel token for token); sample_seed[1] is the shared draw
         # counter, identical on every rank and bumped inside the graph.
         self.temp, self.sample_seed = a((b,),fp), a((1,),torch.int32)
+        self.end_bias = a((b,6),fp)
+        self.end_bias.zero_()
         self.temp.zero_()
         self.sample_seed.fill_(1)
         self.host = {k:torch.empty(tuple(t.shape),dtype=t.dtype,device='cpu',pin_memory=True)
                      for k,t in (('tokens',self.tokens),('meta',self.meta),('slots',self.slot_ids),
-                                 ('start',self.start),('active',self.active),('temp',self.temp))}
+                                 ('start',self.start),('active',self.active),('temp',self.temp),
+                                 ('end_bias',self.end_bias))}
         self.host_checked = torch.empty((b,8),dtype=ix,device='cpu',pin_memory=True)
         self.host_views = {k:t.numpy() for k,t in self.host.items()}
         self.checked_view = self.host_checked.numpy()
         self.uploads = tuple((t,self.host[k]) for k,t in (
             ('tokens',self.tokens),('meta',self.meta),('slots',self.slot_ids),
-            ('start',self.start),('active',self.active),('temp',self.temp)))
+            ('start',self.start),('active',self.active),('temp',self.temp),
+            ('end_bias',self.end_bias)))
         self.features = a((r,15360),bf)
         self.feature_rows = {n:self.features[:n] for n in range(1,7)}
         hidden, alternate = a((r,20480),bf), a((r,20480),bf)
@@ -642,13 +648,13 @@ class DecodeBatch:
         size = window.dec_greedy_workspace_bytes
         size.argtypes, size.restype = [U], C.c_uint64
         self.partial, self.pair, self.gathered = a((size(b),),torch.uint8),a((r,2),fp),a((8,r,2),fp)
-        greedy = _function(window,'dec_sample_tp8',[P]*10+[U]*3)
+        greedy = _function(window,'dec_sample_bias_tp8',[P]*11+[U]*3)
         accept = _function(window,'dec_accept',[P]*5+[U]*2)
         comm = parallel.comm.value if isinstance(parallel.comm,P) else parallel.comm
         self.greedy_fn, self.accept_fn = greedy, accept
         self.greedy_args = tuple(P(t.data_ptr()) for t in
             (self.head.logits,self.partial,self.pair,self.gathered,self.greedy,
-             self.temp,self.sample_seed)) + (
+             self.temp,self.sample_seed,self.end_bias)) + (
                 P(comm),C.cast(parallel.lib.HcclAllGather,P),b,parallel.rank,8)
         self.accept_args = tuple(P(t.data_ptr()) for t in
             (self.tokens,self.greedy,self.meta,self.result))+(b,past.n_slots)
@@ -687,12 +693,17 @@ class DecodeBatch:
             [x.workspace_bytes for x in self.layers]+[x.workspace_bytes for x in self.sources.values()]+
             [x.workspace_bytes for x in self.engrams.values()])
 
-    def stage(self, tokens, slots, starts, active, histories, temps=None):
+    def stage(self, tokens, slots, starts, active, histories, temps=None, thinking=None):
         self.slots, self.starts = slots, starts
         if temps is None:
             temps = (0.,)*self.batch
         if len(temps) != self.batch or any(not 0. <= float(t) < 100. for t in temps):
             raise ValueError('one finite non-negative temperature per batch row')
+        if thinking is not None and len(thinking) != self.batch:
+            raise ValueError('one thinking state per batch row required')
+        bias = ([state.preview(ids) for state,ids in zip(thinking,tokens)]
+                if thinking is not None else [[0.0]*6 for _ in range(self.batch)])
+        self.host_views['end_bias'][:] = bias
         for key,value in (('tokens',tokens),('slots',slots),('start',starts),
                           ('active',active),('temp',temps)):
             self.host_views[key][:] = value
@@ -843,18 +854,16 @@ class TargetLayer:
         self.am, self.ah = hc('attn',x)
         self.fm, self.fh = hc('ffn',middle)
         normed = alloc((t,5120),name='normalized')
-        value = alloc((t,5120),name='residual_value')
         def residual(src, pre, mix, dst, norm):
             return dict(x=src,pre=pre,post=mix['post'],comb=mix['comb'],
-                norm_weight=weight(prefix+norm,fp),normed=normed,value=value,out=dst)
+                norm_weight=weight(prefix+norm,fp),normed=normed,out=dst)
         self.ar = residual(x,incoming,self.am,middle,'attn_norm.weight')
         self.fr = residual(middle,self.am['pre'],self.fm,output,'ffn_norm.weight')
         self.pre = self.fm['pre']
         a = dict(qr=alloc((t,1280),name='qr'),
             qn=query_latent if query_latent is not None else alloc((t,1280),name='qn'),
             qraw=alloc((t,4096),name='qraw'), q=alloc((t,8,512),name='q'),
-            kr=alloc((t,512),name='kr'), kn=alloc((t,512),name='kn'),
-            krot=alloc((t,512),name='krot'), kv=alloc((t,512)),
+            kr=alloc((t,512),name='kr'), kv=alloc((t,512)),
             ao=alloc((t,8,512),name='ao'), inv=alloc((t,8,512),name='inv'),
             freq=freqs, ring=past.main_kv, slots=slots, start=start, active=active,
             q_norm=weight(prefix+'attn.q_norm.weight',fp),
@@ -950,13 +959,14 @@ class TargetLayer:
                         source.run(workspace, owner.rope, owner.libs['attention'])
                     self.attend(main_workspace, source)
                     self.parallel.sum(self.ap[4].storage[2])
-                    native(self.norm, 'dec_tp_cast', (self.ap[4].storage[2],residual['value']), self.batch)
                 else:
                     self.experts(main_workspace, side_workspace, side_stream, events[2:])
             finally:
                 main.wait_event(ready)
-            native(self.norm, 'dec_hc_expand',
-                   tuple(residual[k] for k in ('value','x','post','comb','out')), self.batch)
+            value = self.ap[4].storage[2] if attention else self.moe['out']
+            shared = None if attention else self.shared[2].storage[2]
+            hc_finish(value, shared, residual['x'], residual['post'],
+                      residual['comb'], residual['out'], self.batch)
 
     def attend(self, workspace, source):
         a, b, eps = self.a, self.batch, float(self.config['norm_eps'])
@@ -967,9 +977,7 @@ class TargetLayer:
         p[1](ws)
         native(self.norm, 'dec_rope', (a['qraw'],a['freq'],a['q']), b,8,512,0)
         p[2](ws)
-        native(self.norm, 'dec_rms_norm_f32', (a['kr'],a['kv_norm'],a['kn']), b,512,eps)
-        native(self.norm, 'dec_rope', (a['kn'],a['freq'],a['krot']), b,1,512,0)
-        native(self.attention, 'dec_kv_qdq', (a['krot'],a['kv']), b)
+        kv_prepare(a['kr'],a['kv_norm'],a['freq'],a['kv'],b,eps)
         args = tuple(a[k] for k in ('q','ring','kv','slots','start','active','sink','ao'))
         dims = (b,8,a['ring'].shape[0],self.modulus,self.pad)
         if self.ratio:
@@ -1009,7 +1017,6 @@ class TargetLayer:
         native(self.norm, 'dec_routed_combine', (second.storage[2],t['inverse'],t['out']), b)
         main.wait_event(done)
         self.parallel.sum(self.moe_reduction)
-        native(self.norm, 'dec_moe_finish', (t['out'],self.shared[2].storage[2],self.fr['value']), b)
 
     def close(self):
         if not self.closed:

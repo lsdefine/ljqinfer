@@ -269,16 +269,22 @@ __aicore__ inline float sample_gumbel(uint32_t seed,uint32_t gid){
 // Same contract as greedy_part_kernel plus TEMP FP32[rows/span] (one entry per
 // request, broadcast over its MTP window) and SEED INT32[1].
 extern "C" __global__ __aicore__ void sample_part_kernel(
-    GM_ADDR X,GM_ADDR P,GM_ADDR T,GM_ADDR S,uint32_t rows,uint32_t rank,
+    GM_ADDR X,GM_ADDR P,GM_ADDR T,GM_ADDR S,GM_ADDR B,uint32_t rows,uint32_t rank,
     uint32_t blocks,uint32_t span){
  if(GetBlockIdx()>=blocks)return;
  GlobalTensor<float> x,p,tg;x.SetGlobalBuffer((__gm__ float*)X);
  p.SetGlobalBuffer((__gm__ float*)P);tg.SetGlobalBuffer((__gm__ float*)T);
  GlobalTensor<int32_t> sg;sg.SetGlobalBuffer((__gm__ int32_t*)S);
- TPipe pipe;TBuf<TPosition::VECCALC> bx,bt,bs;
+ TPipe pipe;TBuf<TPosition::VECCALC> bx,bt,bs,bb;
  pipe.InitBuffer(bx,GCHUNK*4);auto v=bx.Get<float>();
  pipe.InitBuffer(bt,128);auto tv=bt.Get<float>();
  pipe.InitBuffer(bs,32);auto sv=bs.Get<int32_t>();
+ pipe.InitBuffer(bb,64*Q*4);auto bv=bb.Get<float>();
+ if(B){
+  GlobalTensor<float> bg;bg.SetGlobalBuffer((__gm__ float*)B);
+  DataCopyPad(bv,bg,DataCopyExtParams{1,rows*4,0,0,0},DataCopyPadExtParams<float>{false,0,0,0});
+  SetFlag<HardEvent::MTE2_S>(EVENT_ID0);WaitFlag<HardEvent::MTE2_S>(EVENT_ID0);
+ }
  TQue<QuePosition::VECOUT,1> qo;pipe.InitBuffer(qo,1,GLANES*4);
  DataCopyPad(sv,sg,DataCopyExtParams{1,4,0,0,0},DataCopyPadExtParams<int32_t>{false,0,0,0});
  SetFlag<HardEvent::MTE2_S>(EVENT_ID0);WaitFlag<HardEvent::MTE2_S>(EVENT_ID0);
@@ -300,6 +306,11 @@ extern "C" __global__ __aicore__ void sample_part_kernel(
   // poisoned row: sampling must not be able to break a served request.
   bool draw=temp>0.0f&&temp<1.0e4f;
   uint32_t base=row*GVFULL+rank*GV+begin;
+  float bias=B?bv.GetValue(row):0.0f;
+  // Only one vocabulary tile owns 128822; avoid a branch per vocabulary entry.
+  if(bias!=0.0f && rank*GV+begin<=128822 && 128822<rank*GV+begin+n){
+   uint32_t j=128822-rank*GV-begin;v.SetValue(j,v.GetValue(j)+bias);
+  }
   float best=v.GetValue(0);
   bool bad=best!=best;
   if(draw&&!bad)best+=temp*sample_gumbel(seed,base);
@@ -453,7 +464,7 @@ extern "C" int dec_sample_local(void* stream,void* logits,void* partial,void* pa
  int rc=greedy_ranges(p,n,5);if(rc)return rc;
  uint32_t blocks=rows*GSPLIT<40?rows*GSPLIT:40;
  sample_part_kernel<<<blocks,nullptr,stream>>>((uint8_t*)logits,(uint8_t*)partial,
-     (uint8_t*)temp,(uint8_t*)seed,rows,rank,blocks,Q);
+     (uint8_t*)temp,(uint8_t*)seed,nullptr,rows,rank,blocks,Q);
  greedy_local_join_kernel<<<1,nullptr,stream>>>((uint8_t*)partial,(uint8_t*)pair,rows);
  return 0;
 }
@@ -467,6 +478,37 @@ extern "C" int dec_sample_tp8(void* stream,void* logits,void* partial,void* pair
                uint64_t(batch)*4,4};
  int rc=greedy_ranges(p,n,7);if(rc)return rc;
  rc=dec_sample_local(stream,logits,partial,pair,temp,seed,batch,rank);if(rc)return rc;
+ rc=all_gather(pair,gathered,rows*2,4,comm,stream);if(rc)return rc;
+ rc=dec_greedy_global(stream,gathered,greedy,batch);if(rc)return rc;
+ // After every reader of this step, so the next step draws a fresh stream.
+ sample_seed_bump_kernel<<<1,nullptr,stream>>>((uint8_t*)seed);
+ return 0;
+}
+
+// Soft </think> bias is applied BEFORE shard-local selection.
+extern "C" int dec_sample_bias_local(void* stream,void* logits,void* partial,void* pair,
+    void* temp,void* seed,void* bias,uint32_t batch,uint32_t rank){
+ if(!stream||!batch||batch>64||rank>=GWORLD)return -1;
+ uint32_t rows=batch*Q;void* p[]={logits,partial,pair,temp,seed,bias};
+ uint64_t n[]={uint64_t(rows)*GV*4,uint64_t(rows)*GSPLIT*GLANES*4,uint64_t(rows)*2*4,
+               uint64_t(batch)*4,4,uint64_t(rows)*4};
+ int rc=greedy_ranges(p,n,6);if(rc)return rc;
+ uint32_t blocks=rows*GSPLIT<40?rows*GSPLIT:40;
+ sample_part_kernel<<<blocks,nullptr,stream>>>((uint8_t*)logits,(uint8_t*)partial,
+     (uint8_t*)temp,(uint8_t*)seed,(uint8_t*)bias,rows,rank,blocks,Q);
+ greedy_local_join_kernel<<<1,nullptr,stream>>>((uint8_t*)partial,(uint8_t*)pair,rows);
+ return 0;
+}
+extern "C" int dec_sample_bias_tp8(void* stream,void* logits,void* partial,void* pair,
+    void* gathered,void* greedy,void* temp,void* seed,void* bias,void* comm,
+    DecodeAllGather all_gather,uint32_t batch,uint32_t rank,uint32_t world){
+ if(!stream||!comm||!all_gather||!batch||batch>64||rank>=GWORLD||world!=GWORLD)return -1;
+ uint64_t rows=uint64_t(batch)*Q;
+ void* p[]={logits,partial,pair,gathered,greedy,temp,seed,bias};
+ uint64_t n[]={rows*GV*4,rows*GSPLIT*GLANES*4,rows*2*4,rows*GWORLD*2*4,rows*8,
+               uint64_t(batch)*4,4,uint64_t(rows)*4};
+ int rc=greedy_ranges(p,n,8);if(rc)return rc;
+ rc=dec_sample_bias_local(stream,logits,partial,pair,temp,seed,bias,batch,rank);if(rc)return rc;
  rc=all_gather(pair,gathered,rows*2,4,comm,stream);if(rc)return rc;
  rc=dec_greedy_global(stream,gathered,greedy,batch);if(rc)return rc;
  // After every reader of this step, so the next step draws a fresh stream.

@@ -1,0 +1,1075 @@
+{
+  "commit": "6bc3c31",
+  "method": "B1, 1024 output tokens, three rounds with reversed/mixed context ordering; production model_step_host_ms, not device-only timing",
+  "requests": [
+    {
+      "label": "r0-ctx0",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 9: Virtual Memory\n\n## 9.1 The Problem That Virtual Memory Solves\n\nEvery program running on a modern computer behaves as though it owns a vast, private, contiguous block of memory. A process on a 64-bit Linux system can, in principle, address 2^48 bytes of memory (256 terabytes) even though the machine might physically contain only 16 gigabytes of DRAM. A process can allocate an array larger than physical RAM, touch only a fraction of it, and never notice the difference. Two processes can each map a page at address 0x400000 and neither will corrupt the other. A program can share a library with a hundred other processes while appearing to have its own private copy.\n\nNone of this is true at the hardware level. Physical memory is a flat array of bytes, shared by every process, with no notion of ownership. The illusion is created by a hardware-software collaboration called **virtual memory**. The hardware component is the **memory management unit (MMU)**, which translates every memory access from a virtual address to a physical address. The software component is the operating system, which maintains the **page tables** that describe the translation and handles the exceptions that occur when a translation cannot be completed.\n\nVirtual memory provides four distinct benefits, and it is worth naming them explicitly because every mechanism in this chapter serves one of them:\n\n1. **Isolation.** Each process has its own address space. A bug in one process cannot read or write another process's memory, because the MMU will refuse to translate an address that is not mapped in the current page table.\n2. **Abstraction of physical layout.** A process's address space can be scattered across physical frames in any order. Contiguous virtual memory does not require contiguous physical memory.\n3. **Overcommitment.** The total virtual memory allocated by all processes can exceed physical RAM. Pages that are not currently in use can live on disk.\n4. **Sharing.** Multiple processes can map the same physical frame at different virtual addresses, which is how shared libraries and copy-on-write forks work.\n\nThe rest of this chapter builds the machinery that delivers these benefits, starting from the translation itself and working upward to the policies that decide which pages to evict when memory runs short.\n\n## 9.2 Pages, Frames, and Address Translation\n\nVirtual memory divides both the virtual address space and physical memory into fixed-size blocks. A block in the virtual address space is a **page**; a block in physical memory is a **frame**. Page and frame sizes are equal, typically 4 KiB on x86-64, though larger sizes (2 MiB and 1 GiB \"huge pages\") are available and increasingly used.\n\nThe choice of page size is a tradeoff. Small pages reduce internal fragmentation (the wasted space at the end of the last page of an allocation) and give the replacement algorithm finer granularity. Large pages reduce the number of translations the MMU must perform and the size of the page tables, and they improve TLB coverage. A 4 KiB page size with a 64-bit address space would require 2^52 page table entries if the table were flat, which is why real hardware uses multi-level tables.\n\n### 9.2.1 The structure of a virtual address\n\nConsider a 32-bit machine with 4 KiB pages. The page size is 2^12 bytes, so the low 12 bits of a virtual address are the **offset** within a page. The high 20 bits are the **virtual page number (VPN)**. Translation replaces the VPN with a **physical frame number (PFN)** and leaves the offset untouched:\n\n```\nvirtual address:  [ VPN (20 bits) | offset (12 bits) ]\n                        |\n                        v  (page table lookup)\nphysical address: [ PFN (20 bits) | offset (12 bits) ]\n```\n\nThe offset is unchanged because a page and a frame are the same size; byte 137 of a page is byte 137 of whatever frame it maps to.\n\n### 9.2.2 A worked translation\n\nSuppose a 32-bit system with 4 KiB pages. A process accesses virtual address `0x00403A7C`.\n\n- Binary: `0000 0000 0100 0000 0011 1010 0111 1100`\n- Offset (low 12 bits): `0xA7C` = 2684\n- VPN (high 20 bits): `0x00403` = 1027\n\nThe MMU looks up VPN 1027 in the page table. Suppose the entry says the page is present and maps to frame `0x1F2`. The physical address is then:\n\n- PFN `0x1F2` shifted left 12 bits: `0x1F2000`\n- Plus offset `0xA7C`: `0x1F2A7C`\n\nThe CPU reads physical address `0x1F2",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 90,
+        "cache_hit_tokens": 2,
+        "cache_hit_rate": 0.022222,
+        "prefill_tokens": 88,
+        "cache_stored_blocks": 1,
+        "cache_stored_tokens": 88,
+        "cache_lookup_seconds": 0.00375,
+        "cache_load_seconds": 0.00559,
+        "model_prefill_seconds": 0.359776,
+        "cache_store_seconds": 0.00525,
+        "cache_store_drain_seconds": 0.00029,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.00314316526055336,
+        "time_to_first_token_seconds": 0.382182,
+        "decode_seconds": 11.975338,
+        "total_seconds": 12.35752,
+        "decode_tps": 85.50453040749368,
+        "decode_steps": 368,
+        "accepted_tokens": 655,
+        "decode_batch_steps": {
+          "1": 368
+        },
+        "prefill_stall_seconds": 8.487142622470856e-05,
+        "wall_ms_per_step": 32.5434065585875,
+        "control_ms_per_step": 0.44298527823032247,
+        "model_step_host_ms": 32.047080716280185,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.78,
+        "decode_tokens_per_step": 2.783,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 90,
+        "completion_tokens": 1024,
+        "total_tokens": 1114,
+        "prompt_tokens_details": {
+          "cached_tokens": 2
+        }
+      },
+      "ok": true,
+      "wall_s": 12.36830279789865,
+      "context_target": 0,
+      "repeat": 0,
+      "valid_perf": true
+    },
+    {
+      "label": "r0-ctx8192",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 9: Virtual Memory — Page Tables, TLBs, Demand Paging, and Page Replacement\n\n## 9.1 Introduction: Why Virtual Memory Exists\n\nEvery modern operating system presents each running process with its own private, contiguous-looking address space. A process on a 64-bit machine can behave as though it owns a vast linear range of addresses, from `0x0000000000000000` up to `0xFFFFFFFFFFFFFFFF`, even though the physical machine may have only a few gigabytes of DRAM installed and dozens of other processes competing for it. This illusion is the work of **virtual memory**, one of the most consequential abstractions in all of computer science.\n\nVirtual memory solves several problems simultaneously:\n\n1. **Isolation.** Each process must be prevented from reading or writing another process's data. Without isolation, a buggy program could corrupt the kernel or another user's application.\n2. **Relocation.** Programs should not need to know at compile time where in physical memory they will be loaded. They can be compiled to run at fixed virtual addresses, and the hardware translates those to whatever physical frames happen to be free.\n3. **Sharing.** Multiple processes may need to share the same code (e.g., `libc.so`) or the same data (e.g., a shared memory segment). Virtual memory lets distinct virtual addresses map to the same physical frame.\n4. **Overcommit and demand loading.** A program may be larger than physical memory, or may only touch a small fraction of its code and data. Virtual memory lets the OS load pages lazily, on first access.\n5. **Protection and permissions.** Each mapping can carry permission bits (read, write, execute, user/supervisor), enforced by hardware on every access.\n\nThe central mechanism is **address translation**: on every memory reference, the CPU converts a *virtual address* (VA) into a *physical address* (PA). This translation is performed by a hardware unit called the **Memory Management Unit (MMU)**, guided by data structures the OS maintains in memory. The most important of those structures is the **page table**.\n\nThis chapter develops the full picture: how pages and frames are defined, how page tables are structured (including multi-level and inverted designs), how the **Translation Lookaside Buffer (TLB)** accelerates translation, how **demand paging** brings pages in only when needed, how **copy-on-write** makes `fork()` cheap, how **swapping** moves pages to and from disk, and how **page replacement** policies decide which page to evict when memory is full. We will work through detailed numerical examples and Python simulations throughout.\n\n---\n\n## 9.2 Pages, Frames, and the Translation Problem\n\nPhysical memory is divided into fixed-size blocks called **frames** (or page frames). Virtual memory is divided into blocks of the same size called **pages**. Typical page sizes are 4 KiB on x86-64, though larger pages (2 MiB \"huge pages\", 1 GiB \"gigantic pages\") exist to reduce translation overhead.\n\nA virtual address is split into two fields:\n\n- **Virtual Page Number (VPN):** the high-order bits identifying which page.\n- **Offset:** the low-order bits identifying the byte within the page.\n\nIf the page size is \\(2^p\\) bytes, the offset occupies the low \\(p\\) bits. For a 32-bit address space with 4 KiB pages (\\(p = 12\\)), the VPN is 20 bits and the offset is 12 bits. For a 48-bit address space (the canonical x86-64 user space) with 4 KiB pages, the VPN is 36 bits and the offset is 12 bits.\n\nTranslation replaces the VPN with a **Physical Page Number (PPN)** (also called the **Physical Frame Number, PFN**), leaving the offset unchanged:\n\n```\nVirtual address:   [ VPN | offset ]\n                     |       |\n                     v       |\nPhysical address:  [ PPN | offset ]\n```\n\nThe offset is preserved because a page and its frame have identical internal layout — byte \\(k\\) of a page maps to byte \\(k\\) of its frame.\n\n### 9.2.1 A Worked Example\n\nSuppose page size = 4 KiB = 4096 bytes, so \\(p = 12\\). Consider the virtual address `0x00003A7C`.\n\n- Binary: `0000 0000 0000 0000 0011 1010 0111 1100`\n- Offset (low 12 bits): `0xA7C` = 2684\n- VPN (remaining bits): `0x3` = 3\n\nIf the page table says VPN 3 maps to PPN `0x1F2`, then the physical address is:\n\n- PPN `0x1F2` shifted left by 12 bits: `0x1F2000`\n- Plus offset `0xA7C`:",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 8197,
+        "cache_hit_tokens": 14,
+        "cache_hit_rate": 0.001708,
+        "prefill_tokens": 8183,
+        "cache_stored_blocks": 2,
+        "cache_stored_tokens": 8182,
+        "cache_lookup_seconds": 0.001742,
+        "cache_load_seconds": 0.008362,
+        "model_prefill_seconds": 1.304449,
+        "cache_store_seconds": 0.063634,
+        "cache_store_drain_seconds": 0.032651,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.004254588857293129,
+        "time_to_first_token_seconds": 1.392834,
+        "decode_seconds": 11.735152,
+        "total_seconds": 13.127986,
+        "decode_tps": 87.25497447351728,
+        "decode_steps": 354,
+        "accepted_tokens": 669,
+        "decode_batch_steps": {
+          "1": 354
+        },
+        "prefill_stall_seconds": 0.00011133216321468353,
+        "wall_ms_per_step": 33.15175306262438,
+        "control_ms_per_step": 0.45042660739799006,
+        "model_step_host_ms": 32.64862421563284,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.89,
+        "decode_tokens_per_step": 2.893,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 8197,
+        "completion_tokens": 1024,
+        "total_tokens": 9221,
+        "prompt_tokens_details": {
+          "cached_tokens": 14
+        }
+      },
+      "ok": true,
+      "wall_s": 13.189905185252428,
+      "context_target": 8192,
+      "repeat": 0,
+      "valid_perf": true
+    },
+    {
+      "label": "r0-ctx36864",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 12: Virtual Memory — Page Tables, TLBs, Demand Paging, and Page Replacement\n\n## 12.1 Introduction: Why Virtual Memory Exists\n\nEvery modern general-purpose operating system gives each process the illusion that it owns a large, private, contiguous block of memory starting at address zero. A process can allocate a gigabyte of heap, map a file into its address space, and spawn threads that share memory — all without knowing which physical DRAM chips hold its bytes, whether some of those bytes live on disk, or whether another process is using the same physical frames. This illusion is **virtual memory**.\n\nVirtual memory is one of the most consequential abstractions in systems design because it simultaneously solves several problems that would otherwise be intractable:\n\n1. **Isolation.** Each process has its own virtual address space. A buggy pointer in process A cannot corrupt process B's data, because A's virtual address 0x4000 and B's virtual address 0x4000 map to different physical frames — or to no frame at all.\n2. **Overcommitment.** The sum of all processes' virtual memory can exceed physical RAM. Cold pages live on disk; hot pages live in RAM. The OS moves pages back and forth transparently.\n3. **Sharing.** Two processes can map the same physical frame at different virtual addresses. This is how shared libraries, shared memory segments, and copy-on-write `fork()` work.\n4. **Protection.** Each mapping carries permission bits (read, write, execute, user/supervisor). The hardware enforces them on every access.\n5. **Simplified loading.** Executables are mapped lazily. A 500 MB binary does not consume 500 MB of RAM at startup; only the pages actually touched are faulted in.\n6. **Large address spaces.** A 64-bit process can address 2^48 bytes (on current x86-64) even if the machine has 16 GB of RAM.\n\nThe cost of this abstraction is that **every memory access must be translated** from a virtual address (VA) to a physical address (PA). Doing that translation in software would be catastrophic — a single load would become dozens of instructions. So the translation is done in hardware, using data structures prepared by the OS. The central data structure is the **page table**, and the hardware cache that accelerates lookups is the **translation lookaside buffer (TLB)**.\n\nThis chapter develops the full picture: how addresses are split, how page tables are organized (single-level, multi-level, inverted, hashed), how the TLB works and why it dominates performance, how demand paging turns a fault into a page fetch, how copy-on-write makes `fork()` cheap, how swapping and page replacement policies decide what to evict, and how all of this interacts with caching and scheduling. We will work through numerical examples and Python simulations throughout.\n\n---\n\n## 12.2 Address Translation Fundamentals\n\n### 12.2.1 Pages and Frames\n\nPhysical memory is divided into fixed-size blocks called **frames** (or page frames). Virtual memory is divided into blocks of the same size called **pages**. Typical page sizes are 4 KiB on x86 and ARM, though 2 MiB and 1 GiB \"huge pages\" exist to reduce translation overhead.\n\nA virtual address is split into two fields:\n\n- **Virtual page number (VPN):** the high-order bits identifying which page.\n- **Offset:** the low-order bits identifying the byte within the page.\n\nIf the page size is \\( P = 2^p \\) bytes, then the offset is \\( p \\) bits and the VPN is the remaining bits. For a 32-bit address space with 4 KiB pages, \\( p = 12 \\), so the offset is 12 bits and the VPN is 20 bits — giving \\( 2^{20} = 1{,}048{,}576 \\) pages.\n\nTranslation replaces the VPN with a **physical frame number (PFN)**; the offset is unchanged. So:\n\n\\[\n\\text{VA} = (\\text{VPN}, \\text{offset}) \\quad\\longrightarrow\\quad \\text{PA} = (\\text{PFN}, \\text{offset})\n\\]\n\nThe offset is preserved because pages and frames are the same size: byte 100 of a page is byte 100 of whatever frame it lives in.\n\n### 12.2.2 Worked Example: Splitting an Address\n\nSuppose page size = 4 KiB = 4096 bytes, so \\( p = 12 \\). Consider the 32-bit virtual address `0x00403A7C`.\n\n- Binary: `0000 0000 0100 0000 0011 1010 0111 1100`\n- Offset = low 12 bits = `0xA7C` = 2684.\n- VPN = high 20 bits = `0x00403` = 1027.\n\nIf the page",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 36868,
+        "cache_hit_tokens": 8120,
+        "cache_hit_rate": 0.220245,
+        "prefill_tokens": 28748,
+        "cache_stored_blocks": 4,
+        "cache_stored_tokens": 28748,
+        "cache_lookup_seconds": 0.016403,
+        "cache_load_seconds": 0.046139,
+        "model_prefill_seconds": 3.217061,
+        "cache_store_seconds": 0.197781,
+        "cache_store_drain_seconds": 0.095445,
+        "chunks": 4,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.008190693333745003,
+        "time_to_first_token_seconds": 3.516182,
+        "decode_seconds": 11.778745,
+        "total_seconds": 15.294926,
+        "decode_tps": 86.9318250321669,
+        "decode_steps": 347,
+        "accepted_tokens": 676,
+        "decode_batch_steps": {
+          "1": 347
+        },
+        "prefill_stall_seconds": 0.00013224221765995026,
+        "wall_ms_per_step": 33.946240567722995,
+        "control_ms_per_step": 0.5311927615909137,
+        "model_step_host_ms": 33.364022456603365,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.948,
+        "decode_tokens_per_step": 2.951,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 36868,
+        "completion_tokens": 1024,
+        "total_tokens": 37892,
+        "prompt_tokens_details": {
+          "cached_tokens": 8120
+        }
+      },
+      "ok": true,
+      "wall_s": 15.594996953383088,
+      "context_target": 36864,
+      "repeat": 0,
+      "valid_perf": true
+    },
+    {
+      "label": "r0-ctx131072",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 12: Virtual Memory — Page Tables, TLBs, Demand Paging, and Page Replacement\n\n## 12.1 Introduction: Why Virtual Memory Exists\n\nEvery modern general-purpose operating system gives each process the illusion that it owns a large, private, contiguous block of memory starting at address zero. A process can allocate a gigabyte of heap, map a file into its address space, and never once worry about where the bytes physically live, whether another process is using the same physical frames, or whether the machine has enough DRAM to hold everything at once. This illusion is called **virtual memory**, and it is arguably the single most important abstraction in systems programming.\n\nVirtual memory solves several problems simultaneously:\n\n1. **Isolation.** Each process has its own address space. A buggy pointer in process A cannot corrupt process B's data, because A's virtual address 0x4000 and B's virtual address 0x4000 map to different physical frames.\n2. **Relocation.** Programs can be compiled to fixed virtual addresses without knowing where they will be loaded. The kernel decides physical placement at run time.\n3. **Sharing.** Multiple processes can map the same physical page (for example, a shared library's text segment) at different virtual addresses.\n4. **Overcommit and demand loading.** A process can reserve more virtual address space than there is physical RAM. Pages are only backed by physical frames when they are actually touched.\n5. **Protection.** Each page table entry carries permission bits (read, write, execute, user/supervisor), enforced by the MMU on every access.\n6. **Persistence and file mapping.** A file can be mapped into the address space; reads and writes to the mapping become reads and writes to the file, mediated by the page cache.\n\nThe hardware component that makes this possible is the **Memory Management Unit (MMU)**. The MMU sits between the CPU core and the memory bus. Every load and store the CPU issues goes through the MMU, which translates a *virtual address* (VA) into a *physical address* (PA) using data structures maintained by the kernel. If the translation fails or the access violates permissions, the MMU raises a **page fault**, and the kernel's fault handler decides what to do.\n\nThis chapter develops the full picture: how addresses are translated, how page tables are structured, how the TLB accelerates translation, how demand paging and copy-on-write work, how swapping extends memory to disk, and how the kernel chooses which pages to evict.\n\n---\n\n## 12.2 Address Spaces and Address Translation\n\nA virtual address is not a single number in the way a physical address is. It is a structured value whose bits are partitioned into fields that index into a hierarchy of translation tables. The exact partitioning depends on the architecture. We will use two concrete examples throughout: a simplified 32-bit x86-style two-level scheme, and a 48-bit x86-64 four-level scheme.\n\n### 12.2.1 A 32-bit two-level example\n\nSuppose the virtual address is 32 bits and pages are 4 KiB (2^12 bytes). Then the low 12 bits are the **page offset** — they are copied unchanged into the physical address. The remaining 20 bits are the **virtual page number (VPN)**. In a two-level scheme, we split the VPN into two 10-bit fields:\n\n```\n 31          22 21          12 11              0\n+--------------+--------------+-----------------+\n|  Directory   |    Table     |     Offset      |\n|   index(10)  |   index(10)  |      (12)       |\n+--------------+--------------+-----------------+\n```\n\nThe MMU first reads the **page directory** (whose physical base address is stored in a control register, CR3 on x86). The directory index selects a **page directory entry (PDE)**. If the PDE is present, it points to a **page table**. The table index selects a **page table entry (PTE)**. If the PTE is present, it contains the **physical frame number (PFN)**. The final physical address is `PFN << 12 | offset`.\n\nSo a single memory access requires **two extra memory reads** (one for the PDE, one for the PTE) before the actual data access. That is a 3× slowdown in the worst case. This is precisely why the TLB exists.\n\n### 12.2.2 A 48-bit four-level example (x86-64)\n\nOn x86-64 with 4 KiB pages, the virtual address is 48 bits (canonical form), split into five fields:\n\n```\n 47      39 38      30 29      21 20      12 11         0\n+---------+---------+---------+---------+-------------+\n| PML4    | PDPT    |  PD     |  PT     |   Offset    |",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 131076,
+        "cache_hit_tokens": 36792,
+        "cache_hit_rate": 0.280692,
+        "prefill_tokens": 94284,
+        "cache_stored_blocks": 12,
+        "cache_stored_tokens": 94284,
+        "cache_lookup_seconds": 0.04498,
+        "cache_load_seconds": 0.083489,
+        "model_prefill_seconds": 11.151225,
+        "cache_store_seconds": 0.512941,
+        "cache_store_drain_seconds": 0.330179,
+        "chunks": 12,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.02083538845181465,
+        "time_to_first_token_seconds": 11.908874,
+        "decode_seconds": 11.397806,
+        "total_seconds": 23.30668,
+        "decode_tps": 89.83041835248794,
+        "decode_steps": 340,
+        "accepted_tokens": 683,
+        "decode_batch_steps": {
+          "1": 340
+        },
+        "prefill_stall_seconds": 0.00015214458107948303,
+        "wall_ms_per_step": 33.52722564493032,
+        "control_ms_per_step": 0.46679030775147323,
+        "model_step_host_ms": 33.00443134982796,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 2.009,
+        "decode_tokens_per_step": 3.012,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 131076,
+        "completion_tokens": 1024,
+        "total_tokens": 132100,
+        "prompt_tokens_details": {
+          "cached_tokens": 36792
+        }
+      },
+      "ok": true,
+      "wall_s": 24.36309832520783,
+      "context_target": 131072,
+      "repeat": 0,
+      "valid_perf": true
+    },
+    {
+      "label": "r1-ctx131072",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 9: Virtual Memory — Page Tables, TLBs, Demand Paging, and Page Replacement\n\n## 9.1 Introduction: Why Virtual Memory Exists\n\nEvery modern general-purpose operating system gives each process the illusion that it owns a large, private, contiguous block of memory starting at address zero. A process can allocate a gigabyte of heap, map a file into its address space, and never once worry about where the bytes physically live, whether another process is using the same physical frames, or whether the machine has enough DRAM to hold everything at once. This illusion is *virtual memory*, and it is arguably the single most important abstraction in systems programming.\n\nVirtual memory solves several problems simultaneously:\n\n1. **Isolation.** Process A cannot read or write process B's memory, because A's virtual addresses translate to a disjoint set of physical frames. A buggy pointer in A cannot corrupt B.\n2. **Relocation.** Programs can be compiled to fixed virtual addresses (e.g., code at `0x400000`) without knowing where they will actually be loaded in physical RAM.\n3. **Overcommit and sharing.** Multiple processes can share the same physical page (shared libraries, `fork` copy-on-write, shared memory segments), and the sum of all virtual address spaces can exceed physical RAM.\n4. **Sparse address spaces.** A process can reserve a huge region (e.g., a 1 TB heap reservation) and only pay for the pages it actually touches.\n5. **Protection and permissions.** Each page can be marked read-only, read-write, executable, or no-access, and the hardware enforces these bits on every access.\n\nThe mechanism that makes all of this work is **address translation**: on every memory reference, the CPU converts a *virtual address* (VA) into a *physical address* (PA). The translation is performed by hardware using data structures maintained by the kernel. This chapter develops the full picture: page tables, TLBs, demand paging, copy-on-write, swapping, and page replacement.\n\n## 9.2 Paging Fundamentals\n\n### 9.2.1 Pages and Frames\n\nVirtual memory is divided into fixed-size blocks called **pages**; physical memory is divided into blocks of the same size called **frames**. Typical page sizes are 4 KiB on x86-64 and ARM64, though larger pages (2 MiB \"huge pages\" on x86-64, 16 KiB on Apple Silicon) are common for performance.\n\nA virtual address is split into two fields:\n\n- **Virtual Page Number (VPN):** the high-order bits identifying which page.\n- **Offset:** the low-order bits identifying the byte within the page.\n\nFor a 4 KiB page, the offset is 12 bits (since 2¹² = 4096). On a 48-bit virtual address space (x86-64 canonical addresses), the VPN is 36 bits, giving 2³⁶ ≈ 68 billion possible pages per process.\n\n### 9.2.2 The Page Table\n\nThe **page table** is a per-process data structure that maps VPNs to **Page Table Entries (PTEs)**. Each PTE contains:\n\n- **Physical Frame Number (PFN):** where the page currently lives in RAM.\n- **Valid/present bit:** whether the translation is currently valid.\n- **Protection bits:** read, write, execute, user/supervisor.\n- **Accessed bit:** set by hardware on read or write.\n- **Dirty bit:** set by hardware on write.\n- **Other bits:** caching policy, global, copy-on-write, etc.\n\nA naive single-level page table would need 2³⁶ entries × 8 bytes = 512 GiB per process. That is absurd. Real systems use **multi-level page tables** so that unallocated regions of the address space cost nothing.\n\n### 9.2.3 Multi-Level Page Tables\n\nOn x86-64 with 4 KiB pages, the page table is four levels deep:\n\n- PML4 (Page Map Level 4): 512 entries, indexed by bits 47–39.\n- PDPT (Page Directory Pointer Table): 512 entries, bits 38–30.\n- PD (Page Directory): 512 entries, bits 29–21.\n- PT (Page Table): 512 entries, bits 20–12.\n- Offset: bits 11–0.\n\nEach level's table is exactly one 4 KiB page containing 512 8-byte entries. A process that uses only a few megabytes of memory needs only a handful of these tables, not the full 512 GiB.\n\n**Worked example.** Suppose a process accesses virtual address `0x00007f3a2c4d5e6f`. Let's decode it.\n\nBinary (48 bits, ignoring the top 16 sign-extension bits):\n\n```\n0000 0000 0000 0000 011",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 131076,
+        "cache_hit_tokens": 131074,
+        "cache_hit_rate": 0.999985,
+        "prefill_tokens": 2,
+        "cache_stored_blocks": 1,
+        "cache_stored_tokens": 2,
+        "cache_lookup_seconds": 0.092646,
+        "cache_load_seconds": 0.17583,
+        "model_prefill_seconds": 0.375255,
+        "cache_store_seconds": 0.000116,
+        "cache_store_drain_seconds": 0.000217,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.023006653413176537,
+        "time_to_first_token_seconds": 0.76092,
+        "decode_seconds": 11.605097,
+        "total_seconds": 12.366017,
+        "decode_tps": 88.22548210813976,
+        "decode_steps": 349,
+        "accepted_tokens": 674,
+        "decode_batch_steps": {
+          "1": 349
+        },
+        "prefill_stall_seconds": 0.00010363012552261353,
+        "wall_ms_per_step": 33.25680235566246,
+        "control_ms_per_step": 0.45486374686133213,
+        "model_step_host_ms": 32.745113836489296,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.931,
+        "decode_tokens_per_step": 2.934,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 131076,
+        "completion_tokens": 1024,
+        "total_tokens": 132100,
+        "prompt_tokens_details": {
+          "cached_tokens": 131074
+        }
+      },
+      "ok": true,
+      "wall_s": 13.467448288574815,
+      "context_target": 131072,
+      "repeat": 1,
+      "valid_perf": true
+    },
+    {
+      "label": "r1-ctx36864",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 12: Virtual Memory — Page Tables, TLBs, Demand Paging, and Page Replacement\n\n## 12.1 Introduction: Why Virtual Memory Exists\n\nEvery modern general-purpose operating system presents each process with its own private, contiguous-looking address space, even though the physical memory of the machine is a shared, finite, and fragmented resource. This illusion is the central achievement of **virtual memory**. Virtual memory decouples the addresses a program uses (virtual addresses) from the addresses that actually select cells in DRAM (physical addresses). The hardware component that performs this translation on every memory access is the **memory management unit (MMU)**, and the data structures that describe the mapping are the **page tables**.\n\nThe motivation for virtual memory is threefold. First, **isolation**: a buggy or malicious process must not be able to read or corrupt another process's data, nor the kernel's. Second, **convenience**: programmers should be able to link and load programs at fixed virtual addresses without worrying about where in physical memory they will land, and they should be able to allocate memory in arbitrary patterns. Third, **capacity and efficiency**: the total virtual memory in use across all processes can vastly exceed physical RAM, because most of it is idle at any instant. Virtual memory lets the system keep only the actively used portions resident and stash the rest on disk.\n\nThis chapter develops the machinery that makes this work: the page table and its multi-level variants, the translation lookaside buffer (TLB) that makes translation fast, demand paging that loads pages lazily, copy-on-write that makes `fork` cheap, swapping that moves pages to and from backing store, and the page replacement policies that decide which pages to evict when memory runs short.\n\n## 12.2 Paging Fundamentals\n\nVirtual and physical memory are divided into fixed-size blocks. A **page** is a block of virtual memory; a **frame** (or page frame) is a block of physical memory. Typical page sizes are 4 KiB on x86-64, though larger pages (2 MiB \"huge pages\", 1 GiB \"gigantic pages\") exist to reduce translation overhead.\n\nA virtual address is split into two fields: a **virtual page number (VPN)** and an **offset**. If the page size is \\(2^p\\) bytes, the low \\(p\\) bits are the offset, and the remaining high bits are the VPN. The offset is copied unchanged into the physical address; only the VPN is translated into a **physical page number (PPN)** (also called a **physical frame number**, PFN). The physical address is then the PPN concatenated with the same offset.\n\nFor a 4 KiB page (\\(p = 12\\)) and a 48-bit virtual address space (x86-64 canonical addresses), the VPN is 36 bits wide and the offset is 12 bits. The physical address on current x86-64 hardware is at most 52 bits, so the PPN is up to 40 bits.\n\nThe mapping from VPN to PPN is stored in a **page table**, an array indexed by VPN whose entries are **page table entries (PTEs)**. Each PTE contains the PPN plus control bits:\n\n- **Present / valid (V)**: the page is resident in physical memory.\n- **Read/write (R/W)**: whether writes are permitted.\n- **User/supervisor (U/S)**: whether user-mode code may access the page.\n- **Accessed (A)**: set by hardware on any access; used by replacement policies.\n- **Dirty (D)**: set by hardware on a write; indicates the page must be written back before eviction.\n- **No-execute (NX)**: whether the page may hold executable code.\n- **Global (G)**: whether the TLB entry should survive an address-space switch.\n\nA single-level page table for a 36-bit VPN would need \\(2^{36}\\) entries. At 8 bytes per entry that is 512 GiB per process — absurd. Real systems use **multi-level page tables** so that only the portions of the address space actually in use consume memory.\n\n## 12.3 Multi-Level Page Tables\n\nThe idea of a multi-level page table is to treat the VPN itself as a sequence of indices into a tree of tables. On x86-64 with 4 KiB pages, the 36-bit VPN is split into four 9-bit indices, giving a four-level tree: PML4, PDPT, PD, and PT. Each table has \\(2^9 = 512\\) entries of 8 bytes, so each table occupies exactly one 4 KiB page.\n\nTranslation proceeds as follows. The MMU reads a **page table base register** (CR3 on x86) that points to the process's top-level table. The top 9 bits of the VPN index into it, yielding the address of a second-level table. The next",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 36868,
+        "cache_hit_tokens": 36866,
+        "cache_hit_rate": 0.999946,
+        "prefill_tokens": 2,
+        "cache_stored_blocks": 1,
+        "cache_stored_tokens": 2,
+        "cache_lookup_seconds": 0.026618,
+        "cache_load_seconds": 0.089188,
+        "model_prefill_seconds": 0.317679,
+        "cache_store_seconds": 0.000106,
+        "cache_store_drain_seconds": 0.000211,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.010617243126034737,
+        "time_to_first_token_seconds": 0.476456,
+        "decode_seconds": 11.903718,
+        "total_seconds": 12.380174,
+        "decode_tps": 86.00154521124018,
+        "decode_steps": 352,
+        "accepted_tokens": 671,
+        "decode_batch_steps": {
+          "1": 352
+        },
+        "prefill_stall_seconds": 9.903125464916229e-05,
+        "wall_ms_per_step": 33.82603070614013,
+        "control_ms_per_step": 0.6016276893205941,
+        "model_step_host_ms": 33.159057636194945,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.906,
+        "decode_tokens_per_step": 2.909,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 36868,
+        "completion_tokens": 1024,
+        "total_tokens": 37892,
+        "prompt_tokens_details": {
+          "cached_tokens": 36866
+        }
+      },
+      "ok": true,
+      "wall_s": 12.652148799970746,
+      "context_target": 36864,
+      "repeat": 1,
+      "valid_perf": true
+    },
+    {
+      "label": "r1-ctx8192",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 12: Virtual Memory — Page Tables, TLBs, Demand Paging, and Page Replacement\n\n## 12.1 Introduction: Why Virtual Memory Exists\n\nEvery modern general-purpose operating system presents each running process with its own private, contiguous-looking address space. A process on a 64-bit machine can behave as though it owns a vast linear range of addresses, from `0x0000000000000000` up to `0xFFFFFFFFFFFFFFFF`, even though the physical machine may have only a few gigabytes of DRAM installed and dozens of other processes competing for it. This illusion is the central achievement of **virtual memory**.\n\nVirtual memory is a set of hardware and software mechanisms that decouple the addresses a program uses (virtual addresses) from the addresses that actually select cells in physical RAM (physical addresses). The decoupling buys us four things simultaneously:\n\n1. **Isolation.** Process A cannot read or write process B's memory unless the kernel deliberately maps a shared region. A stray pointer in one process cannot corrupt another.\n2. **Abstraction of capacity.** The total virtual address space summed across processes can vastly exceed physical RAM, because pages that are not currently needed can live on disk.\n3. **Simplified loading and sharing.** Executables and shared libraries can be mapped into many processes at once, and code pages can be shared read-only.\n4. **Efficient allocation.** Memory can be handed out in fixed-size chunks (pages) without requiring large contiguous physical extents, eliminating external fragmentation at the physical level.\n\nThe reference notes for this chapter remind us that systems rely on address translation, memory isolation, caching, scheduling, and persistent storage. Virtual memory is where all five intersect: translation is the core mechanism, isolation is the security consequence, the TLB is a cache, page replacement is a scheduling problem over memory frames, and swapping depends on persistent storage.\n\nThis chapter develops the full stack: the page table, the translation lookaside buffer, demand paging, copy-on-write, swapping, and the family of page replacement algorithms, with worked examples and Python simulations throughout.\n\n---\n\n## 12.2 Pages, Frames, and the Translation Problem\n\nPhysical memory is divided into fixed-size blocks called **frames** (or page frames). Virtual memory is divided into blocks of the same size called **pages**. Typical page sizes are 4 KiB on x86-64, but larger pages (2 MiB \"huge pages\", 1 GiB \"gigantic pages\") exist to reduce translation overhead.\n\nA virtual address is split into two fields:\n\n- A **page number** (VPN, virtual page number) — the high-order bits.\n- An **offset** — the low-order bits, whose width is `log2(page_size)`.\n\nFor a 4 KiB page, the offset is 12 bits. A 48-bit virtual address on x86-64 therefore has 36 bits of VPN and 12 bits of offset. The physical address is formed by concatenating the **physical frame number** (PFN) with the same offset. Because the offset is copied verbatim, translation is really just a lookup: `VPN → PFN`.\n\nThe mapping is stored in a **page table**, a per-process data structure indexed by VPN. The hardware component that performs the lookup on every memory access is the **memory management unit** (MMU).\n\n### 12.2.1 A first worked example\n\nSuppose page size = 4 KiB = 4096 bytes, so offset bits = 12. A process accesses virtual address `0x00003A7C`.\n\n- Offset = low 12 bits = `0xA7C` = 2684.\n- VPN = high bits = `0x00003` = 3.\n\nIf the page table maps VPN 3 to PFN `0x1F2`, then the physical address is `(0x1F2 << 12) | 0xA7C = 0x1F2A7C`.\n\nThat is the entire essence of translation. Everything else in this chapter is about making this lookup fast, correct under sharing, and feasible when memory is scarce.\n\n---\n\n## 12.3 Page Table Structures\n\n### 12.3.1 The naive single-level page table\n\nThe simplest design is a flat array indexed by VPN. Each entry, a **page table entry** (PTE), contains:\n\n- The PFN.\n- A **valid/present** bit — is this page currently in physical memory?\n- A **dirty** bit — has the page been written since it was loaded?\n- A **referenced/accessed** bit — has the page been touched recently?\n- **Protection bits** — read, write, execute permissions.\n- Sometimes a **global** bit, a **cache-disable** bit, and other flags.\n\nThe problem with a flat table is size. With 48-bit virtual addresses and 4 KiB pages, there are 2^36 ≈ 68.7 billion",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 8197,
+        "cache_hit_tokens": 8196,
+        "cache_hit_rate": 0.999878,
+        "prefill_tokens": 1,
+        "cache_stored_blocks": 0,
+        "cache_stored_tokens": 0,
+        "cache_lookup_seconds": 0.008378,
+        "cache_load_seconds": 0.048587,
+        "model_prefill_seconds": 0.310742,
+        "cache_store_seconds": 0.0,
+        "cache_store_drain_seconds": 0.0,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.0058263149112463,
+        "time_to_first_token_seconds": 0.385482,
+        "decode_seconds": 11.858631,
+        "total_seconds": 12.244114,
+        "decode_tps": 86.33639483427551,
+        "decode_steps": 357,
+        "accepted_tokens": 666,
+        "decode_batch_steps": {
+          "1": 357
+        },
+        "prefill_stall_seconds": 0.00015423260629177094,
+        "wall_ms_per_step": 33.2229223196246,
+        "control_ms_per_step": 0.509347437935717,
+        "model_step_host_ms": 32.65173169745117,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.866,
+        "decode_tokens_per_step": 2.868,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 8197,
+        "completion_tokens": 1024,
+        "total_tokens": 9221,
+        "prompt_tokens_details": {
+          "cached_tokens": 8196
+        }
+      },
+      "ok": true,
+      "wall_s": 12.306193405762315,
+      "context_target": 8192,
+      "repeat": 1,
+      "valid_perf": true
+    },
+    {
+      "label": "r1-ctx0",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 9: Virtual Memory\n\n## 9.1 The Problem That Virtual Memory Solves\n\nEvery program running on a modern computer behaves as though it owns a vast, private, contiguous block of memory. A process on a 64-bit Linux system can, in principle, address 2^48 bytes of memory (256 terabytes) even though the machine might physically contain only 16 gigabytes of DRAM. A process can allocate an array larger than physical RAM, touch only a small fraction of it, and never notice that the operating system is quietly juggling data between RAM and disk. Two processes can each believe they have loaded a shared library at the same address, and neither will corrupt the other. None of this is an illusion in the pejorative sense — it is a carefully engineered abstraction called **virtual memory**.\n\nVirtual memory is one of the most consequential ideas in systems design. It decouples the address space a program sees from the physical memory that actually backs it. This decoupling buys four things simultaneously:\n\n1. **Isolation.** Each process gets its own address space. A wild pointer in one process cannot scribble over another process's data, because the hardware translates every address through a per-process mapping.\n2. **The illusion of abundance.** Programs can allocate more memory than the machine physically has, because unused pages can live on disk.\n3. **Efficient sharing.** Multiple processes can map the same physical page — for example, a shared library's code — without duplicating it.\n4. **Simplified loading and allocation.** Programs do not need to be loaded contiguously, and memory can be allocated lazily, only when it is actually touched.\n\nThe mechanism that makes all of this work is a hardware-software partnership: the **memory management unit (MMU)** in the CPU translates virtual addresses to physical addresses using **page tables** maintained by the operating system, and a small cache called the **translation lookaside buffer (TLB)** accelerates that translation. When a translation is missing or a page is not resident, the CPU traps into the kernel, which handles the situation — perhaps by loading a page from disk, perhaps by allocating a fresh zeroed page, perhaps by copying a page that was shared.\n\nThis chapter develops the full picture. We begin with the address translation machinery, then build up through TLBs, demand paging, copy-on-write, swapping, and page replacement. Throughout, we will work concrete numerical examples and write Python simulations that make the algorithms tangible.\n\n---\n\n## 9.2 Pages, Frames, and Address Translation\n\n### 9.2.1 The basic split\n\nVirtual memory divides the address space into fixed-size blocks called **pages**. Physical memory is divided into blocks of the same size called **frames**. A page and a frame are the same size — typically 4 KiB on x86-64, though larger sizes (2 MiB, 1 GiB) exist as \"huge pages.\"\n\nA virtual address is split into two fields:\n\n- The **page number** (also called the virtual page number, VPN): the high-order bits.\n- The **offset**: the low-order bits, which select a byte within the page.\n\nIf the page size is 2^p bytes, the offset occupies the low p bits. The remaining bits form the VPN. For a 4 KiB page (p = 12) and a 48-bit virtual address, the VPN is 36 bits wide and the offset is 12 bits wide.\n\nThe MMU translates the VPN into a **physical frame number** (PFN) by consulting the page table. The offset is copied through unchanged, because a page and a frame have identical internal layout. The physical address is then `(PFN << p) | offset`.\n\n**Worked example 9.1.** Suppose the page size is 4 KiB (2^12), and a process accesses virtual address `0x0000_7F3A_2C48`. The low 12 bits are `0x248` — that is the offset. The remaining bits, `0x0000_7F3A_2`, form the VPN. If the page table says VPN `0x7F3A2` maps to frame `0x1B4`, then the physical address is `(0x1B4 << 12) | 0x248 = 0x1B4_248`.\n\n### 9.2.2 Page table entries\n\nEach entry in the page table — a **page table entry (PTE)** — contains more than just the frame number. A typical PTE on x86-64 includes:\n\n- **Present (P) bit:** is this page currently in physical memory?\n- **Read/Write (R/W) bit:** may the page be written?\n- **User/Supervisor (U/S) bit:** may user-mode code access it?\n- **Accessed (A) bit:** has the page been read or written since the bit",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 90,
+        "cache_hit_tokens": 88,
+        "cache_hit_rate": 0.977778,
+        "prefill_tokens": 2,
+        "cache_stored_blocks": 1,
+        "cache_stored_tokens": 2,
+        "cache_lookup_seconds": 0.000157,
+        "cache_load_seconds": 0.026487,
+        "model_prefill_seconds": 0.340225,
+        "cache_store_seconds": 0.000105,
+        "cache_store_drain_seconds": 0.00019,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.0033123679459095,
+        "time_to_first_token_seconds": 0.375362,
+        "decode_seconds": 11.539927,
+        "total_seconds": 11.915289,
+        "decode_tps": 88.7293260436511,
+        "decode_steps": 360,
+        "accepted_tokens": 663,
+        "decode_batch_steps": {
+          "1": 360
+        },
+        "prefill_stall_seconds": 9.892135858535767e-05,
+        "wall_ms_per_step": 32.057545923938356,
+        "control_ms_per_step": 0.460188328805897,
+        "model_step_host_ms": 31.54347562748525,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.842,
+        "decode_tokens_per_step": 2.844,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 90,
+        "completion_tokens": 1024,
+        "total_tokens": 1114,
+        "prompt_tokens_details": {
+          "cached_tokens": 88
+        }
+      },
+      "ok": true,
+      "wall_s": 11.923732351511717,
+      "context_target": 0,
+      "repeat": 1,
+      "valid_perf": true
+    },
+    {
+      "label": "r2-ctx8192",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 9: Virtual Memory — Abstraction, Translation, and the Machinery of Illusion\n\n## 9.1 The Problem Virtual Memory Solves\n\nEvery program running on a modern computer behaves as though it owns a vast, private, contiguous block of memory. A process on a 64-bit machine can, in principle, address 2^64 bytes — roughly 18 exabytes — even though the physical machine may contain only 16 gigabytes of DRAM. A process can allocate an array larger than physical RAM, fork a child that shares its entire address space, and map a file directly into memory as though it were an array. None of this is physically true. The hardware does not hand each process a private 18-exabyte slab of silicon. Instead, the operating system and the memory management unit (MMU) cooperate to construct a convincing illusion: **virtual memory**.\n\nVirtual memory is one of the most consequential abstractions in all of computing. It decouples the addresses a program uses from the addresses that actually reach the memory bus. This decoupling buys four things simultaneously:\n\n1. **Isolation.** Each process has its own virtual address space. Process A cannot read or write process B's memory unless the OS explicitly arranges a shared mapping. A buggy pointer in one program cannot corrupt another.\n2. **The illusion of abundance.** Programs can allocate more virtual memory than there is physical RAM. The OS keeps the working set in DRAM and parks the rest on disk.\n3. **Simplified loading and sharing.** Executables and shared libraries are mapped into address spaces on demand. Multiple processes running the same `libc` share one physical copy of its code pages.\n4. **Efficient allocation and protection.** Memory can be allocated lazily, protected at page granularity (read/write/execute), and shared copy-on-write.\n\nThe cost of this illusion is indirection. Every memory access must be translated from a virtual address to a physical address. Doing that translation naively — with a lookup table consulted on every load and store — would be catastrophically slow. The rest of this chapter is, in large part, the story of how systems engineers made that indirection fast enough to be invisible.\n\n## 9.2 Pages, Frames, and the Address Translation Pipeline\n\nVirtual memory operates at the granularity of **pages**. A page is a fixed-size block of virtual address space; a **frame** (or page frame) is a fixed-size block of physical memory. The page size is chosen by the hardware architecture. On x86-64 the base page size is 4 KiB, with optional larger pages of 2 MiB and 1 GiB. On many ARM systems, 4 KiB, 16 KiB, and 64 KiB are all possible.\n\nSuppose the page size is P = 2^p bytes. Then a virtual address V is decomposed into two fields:\n\n- The **page number** VPN = V >> p (the high bits).\n- The **offset** = V & (P − 1) (the low p bits).\n\nTranslation replaces the VPN with a **physical frame number** (PFN), leaving the offset untouched. The physical address is then PFN << p | offset. The offset is preserved because pages and frames are the same size: byte 137 within a page is byte 137 within whatever frame that page maps to.\n\nThis is the entire conceptual core of paging. Everything else — page tables, TLBs, demand paging, swapping — is machinery built around this one substitution.\n\n### A worked example\n\nLet P = 4096 bytes (p = 12). Consider the virtual address 0x00007F3A2C4D5E6F. The low 12 bits are 0xE6F = 3695, so the offset is 3695. The VPN is 0x00007F3A2C4D5 = 139,946,428,629,333 (in decimal). If the page table says this VPN maps to PFN 0x1A2B3, then the physical address is 0x1A2B3 << 12 | 0xE6F = 0x1A2B3E6F.\n\nNotice how much of the virtual address is \"wasted\" in this example: the process is using a high address, typical of a stack or mmap region on Linux, but the physical frame is low. The mapping is arbitrary; that is the point.\n\n## 9.3 Page Tables\n\nThe mapping from VPN to PFN is stored in a **page table**. Conceptually, a page table is an array indexed by VPN, where each entry holds a PFN plus permission bits. For a 64-bit address space with 4 KiB pages, that array would have 2^52 entries — utterly infeasible to store densely. Real hardware uses **multi-level (hierarchical) page tables** to store",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 8197,
+        "cache_hit_tokens": 8196,
+        "cache_hit_rate": 0.999878,
+        "prefill_tokens": 1,
+        "cache_stored_blocks": 0,
+        "cache_stored_tokens": 0,
+        "cache_lookup_seconds": 0.005896,
+        "cache_load_seconds": 0.048915,
+        "model_prefill_seconds": 0.304368,
+        "cache_store_seconds": 0.0,
+        "cache_store_drain_seconds": 0.0,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.004225399345159531,
+        "time_to_first_token_seconds": 0.373703,
+        "decode_seconds": 12.011583,
+        "total_seconds": 12.385286,
+        "decode_tps": 85.24829229744186,
+        "decode_steps": 368,
+        "accepted_tokens": 655,
+        "decode_batch_steps": {
+          "1": 368
+        },
+        "prefill_stall_seconds": 9.394064545631409e-05,
+        "wall_ms_per_step": 32.64122506927537,
+        "control_ms_per_step": 0.4585496068972608,
+        "model_step_host_ms": 32.12893593793168,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.78,
+        "decode_tokens_per_step": 2.783,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 8197,
+        "completion_tokens": 1024,
+        "total_tokens": 9221,
+        "prompt_tokens_details": {
+          "cached_tokens": 8196
+        }
+      },
+      "ok": true,
+      "wall_s": 12.446833988651633,
+      "context_target": 8192,
+      "repeat": 2,
+      "valid_perf": true
+    },
+    {
+      "label": "r2-ctx0",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 9: Virtual Memory\n\n## 9.1 The Problem That Virtual Memory Solves\n\nEvery program running on a modern computer behaves as though it owns a vast, private, contiguous block of memory. A process on a 64-bit Linux system can, in principle, address 2^48 bytes of memory (256 terabytes) even though the machine might physically contain only 16 gigabytes of DRAM. A process can allocate an array larger than physical RAM, and the operating system will not crash — it will simply make the array work, perhaps more slowly. Two processes can each believe they have loaded a shared library at the same address, and neither will corrupt the other. A program can dereference a null pointer and receive a clean segmentation fault rather than silently scribbling over the kernel's data structures.\n\nNone of this is free. It is the product of one of the most elegant abstractions in systems software: **virtual memory**. Virtual memory is the layer of indirection between the addresses a program uses and the physical memory cells those addresses ultimately refer to. The CPU's memory management unit (MMU) translates every load and store from a *virtual address* (VA) into a *physical address* (PA) using data structures maintained by the operating system. Because the translation is programmable, the OS can map any virtual page to any physical frame, leave pages unmapped to trap illegal accesses, share a single physical frame among many virtual pages, and move pages to disk and back without the program ever noticing.\n\nThis chapter develops virtual memory from first principles. We begin with the mechanics of paging and page tables, then examine the translation lookaside buffer (TLB) that makes translation fast. We then turn to demand paging, the policy that lets the OS load pages lazily, and copy-on-write, the trick that makes `fork()` cheap. We cover swapping and the machinery of page faults, and finally we study page replacement algorithms — the policies that decide which page to evict when memory runs short. Throughout, we build worked examples and Python simulations so that the mechanics are concrete rather than hand-wavy.\n\n## 9.2 Paging: The Basic Mechanism\n\nVirtual memory is implemented almost universally with **paging**. Physical memory is divided into fixed-size blocks called **frames** (typically 4 KiB on x86-64, though 2 MiB and 1 GiB huge pages exist). Virtual memory is divided into blocks of the same size called **pages**. A virtual address is split into two fields: a **page number** (the high-order bits) and an **offset** (the low-order bits). The offset selects a byte within the page and is copied unchanged into the physical address; the page number is translated into a **frame number** by a lookup in a per-process **page table**.\n\nIf pages are 2^p bytes, then the low p bits of a virtual address are the offset, and the remaining bits are the virtual page number (VPN). The physical address is formed by concatenating the translated frame number (PFN) with the same offset.\n\n**Worked example 9.1.** Suppose pages are 4 KiB (2^12 bytes) and the machine has 32-bit virtual addresses and 28-bit physical addresses. A virtual address is 32 bits: 20 bits of VPN and 12 bits of offset. A physical address is 28 bits: 16 bits of PFN and 12 bits of offset. Consider the virtual address `0x00003A7C`. The offset is the low 12 bits: `0xA7C`. The VPN is the high 20 bits: `0x00003`. If the page table maps VPN 3 to PFN `0x1F2`, the physical address is `0x1F2A7C`. Note that the offset `0xA7C` is identical in both addresses — translation never changes the offset.\n\nThe page table is an array indexed by VPN. Each entry, called a **page table entry (PTE)**, contains the frame number plus control bits. The essential bits are:\n\n- **Present/valid (P):** whether the translation is currently valid. If P = 0, accessing the page raises a page fault.\n- **Read/write (R/W):** whether the page is writable.\n- **User/supervisor (U/S):** whether user-mode code may access the page.\n- **Accessed (A):** set by hardware when the page is read or written; used by replacement algorithms.\n- **Dirty (D):** set by hardware when the page is written; tells the OS whether the page must be written back to disk before eviction.\n- **No-execute (NX):** whether the page may hold executable code.\n- **Physical frame number (PFN):** the actual location in DRAM.\n\nThe MMU performs this translation on every memory reference. On a simple machine with a single-level page table, the translation is",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 90,
+        "cache_hit_tokens": 88,
+        "cache_hit_rate": 0.977778,
+        "prefill_tokens": 2,
+        "cache_stored_blocks": 1,
+        "cache_stored_tokens": 2,
+        "cache_lookup_seconds": 0.000186,
+        "cache_load_seconds": 0.027047,
+        "model_prefill_seconds": 0.358999,
+        "cache_store_seconds": 0.000104,
+        "cache_store_drain_seconds": 0.000159,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.0033804085105657578,
+        "time_to_first_token_seconds": 0.394954,
+        "decode_seconds": 11.237099,
+        "total_seconds": 11.632052,
+        "decode_tps": 91.11777591145537,
+        "decode_steps": 352,
+        "accepted_tokens": 671,
+        "decode_batch_steps": {
+          "1": 352
+        },
+        "prefill_stall_seconds": 0.00014123134315013885,
+        "wall_ms_per_step": 31.926711116367105,
+        "control_ms_per_step": 0.48333438727158035,
+        "model_step_host_ms": 31.386989073573865,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.906,
+        "decode_tokens_per_step": 2.909,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 90,
+        "completion_tokens": 1024,
+        "total_tokens": 1114,
+        "prompt_tokens_details": {
+          "cached_tokens": 88
+        }
+      },
+      "ok": true,
+      "wall_s": 11.640668079257011,
+      "context_target": 0,
+      "repeat": 2,
+      "valid_perf": true
+    },
+    {
+      "label": "r2-ctx131072",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 12: Virtual Memory — Page Tables, TLBs, Demand Paging, and Page Replacement\n\n## 12.1 Introduction: Why Virtual Memory Exists\n\nEvery modern general-purpose operating system gives each process the illusion that it owns a large, private, contiguous block of memory starting at address zero. A process can allocate a gigabyte of heap, map a file into its address space, and never once worry about where the physical DRAM chips actually store those bytes, whether another process is using the same physical frames, or whether the data is currently on disk. This illusion is called **virtual memory**, and it is arguably the single most important abstraction in systems programming.\n\nVirtual memory solves several problems simultaneously:\n\n1. **Isolation.** Process A cannot read or write process B's memory unless the kernel explicitly arranges a shared mapping. Each process has its own virtual address space, and the hardware enforces the boundary.\n2. **Relocation.** Programs can be compiled to fixed virtual addresses (e.g., a code segment at `0x400000`) without knowing which physical frames they will occupy at run time.\n3. **Overcommit and sharing.** The sum of all virtual memory across processes can exceed physical RAM. Pages that are not currently needed can live on disk, and identical pages (such as shared libraries or `fork`-copied pages) can be physically shared.\n4. **Protection and permissions.** Each page can be marked read-only, read-write, executable, or non-executable, and the hardware traps violations.\n5. **Memory-mapped I/O and files.** A file can be mapped into the address space, and ordinary loads and stores become file reads and writes.\n\nThe mechanism that makes all of this work is **address translation**: on every memory access, the CPU converts a *virtual address* (what the program sees) into a *physical address* (what the memory bus sees). This chapter develops that mechanism from the ground up: page tables, TLBs, demand paging, copy-on-write, swapping, and page replacement.\n\n## 12.2 Paging Fundamentals\n\n### 12.2.1 Pages and Frames\n\nVirtual memory is divided into fixed-size blocks called **pages**, and physical memory is divided into blocks of the same size called **frames**. Typical page sizes are 4 KiB on x86-64 and ARM, though larger pages (2 MiB \"huge pages\" on x86-64, 16 KiB on Apple Silicon) are common for performance-critical workloads.\n\nA virtual address is split into two parts:\n\n- The **page number** (VPN, virtual page number): the high-order bits.\n- The **offset**: the low-order bits, which select a byte within the page.\n\nIf the page size is \\(2^p\\) bytes, the low \\(p\\) bits are the offset, and the remaining bits are the VPN. For a 4 KiB page (\\(p = 12\\)) and a 48-bit virtual address space (x86-64), the VPN is 36 bits and the offset is 12 bits.\n\n### 12.2.2 The Page Table\n\nThe mapping from VPN to **physical frame number** (PFN) is stored in a per-process data structure called the **page table**. Conceptually, the page table is an array indexed by VPN whose entries contain:\n\n- The PFN (or a disk location, if the page is not resident).\n- A **valid/present bit** indicating whether the page is currently in physical memory.\n- **Protection bits** (read, write, execute).\n- A **dirty bit** (has the page been modified?).\n- An **accessed/reference bit** (has the page been read or written recently?).\n- A **user/supervisor** bit.\n\nA single-level page table for a 48-bit address space with 4 KiB pages would need \\(2^{36}\\) entries. At 8 bytes per entry, that is 512 GiB per process — obviously impossible. Real systems use **multi-level page tables** (also called hierarchical page tables) so that only the portions of the address space that are actually used consume memory.\n\n### 12.2.3 Multi-Level Page Tables\n\nOn x86-64, a 48-bit virtual address is split into four 9-bit indices plus a 12-bit offset:\n\n```\n[47:39] PML4 index (9 bits)\n[38:30] PDPT index (9 bits)\n[29:21] PD   index (9 bits)\n[20:12] PT   index (9 bits)\n[11:0]  offset   (12 bits)\n```\n\nEach level is a table of 512 entries (because \\(2^9 = 512\\)), each entry 8 bytes, so each table is exactly 4 KiB — one page. The **CR3** register holds the physical address of the top-level table (PML4) for the currently running process. On a context",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 131076,
+        "cache_hit_tokens": 131074,
+        "cache_hit_rate": 0.999985,
+        "prefill_tokens": 2,
+        "cache_stored_blocks": 1,
+        "cache_stored_tokens": 2,
+        "cache_lookup_seconds": 0.092634,
+        "cache_load_seconds": 0.162556,
+        "model_prefill_seconds": 0.344866,
+        "cache_store_seconds": 0.000114,
+        "cache_store_drain_seconds": 0.000187,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.020313551649451256,
+        "time_to_first_token_seconds": 0.712459,
+        "decode_seconds": 11.279782,
+        "total_seconds": 11.99224,
+        "decode_tps": 90.77931013219805,
+        "decode_steps": 340,
+        "accepted_tokens": 683,
+        "decode_batch_steps": {
+          "1": 340
+        },
+        "prefill_stall_seconds": 9.930320084095001e-05,
+        "wall_ms_per_step": 33.17677454803796,
+        "control_ms_per_step": 0.4775724045055754,
+        "model_step_host_ms": 32.64432584538179,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 2.009,
+        "decode_tokens_per_step": 3.012,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 131076,
+        "completion_tokens": 1024,
+        "total_tokens": 132100,
+        "prompt_tokens_details": {
+          "cached_tokens": 131074
+        }
+      },
+      "ok": true,
+      "wall_s": 13.071138994768262,
+      "context_target": 131072,
+      "repeat": 2,
+      "valid_perf": true
+    },
+    {
+      "label": "r2-ctx36864",
+      "stream": false,
+      "status": 200,
+      "output": "# Chapter 12: Virtual Memory — Page Tables, TLBs, Demand Paging, and Page Replacement\n\n## 12.1 Introduction: Why Virtual Memory Exists\n\nEvery modern general-purpose operating system presents each process with its own private, contiguous-looking address space, even though the physical memory installed in the machine is a single shared, finite resource. This illusion is called **virtual memory**, and it is arguably the single most important abstraction in systems programming. Without it, every program would have to be written knowing exactly where in physical RAM it would be loaded, how much memory was available, and which other programs were running concurrently. With it, a program can be compiled to assume it owns a vast, linear address space starting at some fixed base, and the operating system plus hardware cooperate to map that fictional address space onto real physical frames, disk-backed storage, and shared libraries.\n\nVirtual memory solves several problems simultaneously:\n\n1. **Isolation.** Each process gets its own translation tables, so a bug in one process cannot read or write another process's memory. The hardware enforces this on every single memory access.\n2. **Relocation.** Programs can be linked at a fixed virtual address (say, `0x400000` for a typical ELF executable) regardless of where they actually land in physical RAM.\n3. **Overcommit and demand loading.** A process can reserve more virtual address space than there is physical memory, because pages are only backed by real frames when they are actually touched.\n4. **Sharing.** Multiple processes can map the same physical frame (for example, a shared library's text segment) at different virtual addresses, saving memory.\n5. **Persistence and swapping.** Pages that are not currently needed can be written to disk and brought back later, effectively extending RAM.\n\nThe rest of this chapter develops the machinery that makes this work: page tables, translation lookaside buffers (TLBs), demand paging, copy-on-write, swapping, and page replacement policies. We will build up from the hardware primitives to the OS policies, with worked examples and Python simulations throughout.\n\n## 12.2 Paging Fundamentals\n\nVirtual memory is almost always implemented with **paging**. The virtual address space is divided into fixed-size blocks called **pages** (typically 4 KiB on x86-64, though 2 MiB and 1 GiB huge pages exist). Physical memory is divided into blocks of the same size called **frames**. A **page table** maps each virtual page to a physical frame (or marks it as not present, read-only, executable, etc.).\n\nConsider a 32-bit virtual address with 4 KiB pages. The offset within a page is 12 bits (since 2^12 = 4096). The remaining 20 bits index the page. That gives 2^20 = 1,048,576 virtual pages per process. A flat page table with one 4-byte entry per page would be 4 MiB per process — too large to keep resident for every process. This is why real systems use **multi-level page tables**.\n\n### 12.2.1 Two-Level Page Tables\n\nIn a classic two-level scheme (as used by 32-bit x86 without PAE), the 20-bit page number is split into a 10-bit **page directory index** and a 10-bit **page table index**. The page directory has 1024 entries, each pointing to a page table; each page table has 1024 entries, each pointing to a frame. The offset is 12 bits.\n\n```\nVirtual address (32 bits):\n+--------+--------+------------+\n| PD idx | PT idx |   offset   |\n| 10 bits| 10 bits|  12 bits   |\n+--------+--------+------------+\n```\n\nTranslation proceeds as follows:\n\n1. Read the **CR3** register to find the physical address of the current page directory.\n2. Use the PD index to select a page-directory entry (PDE). If the PDE's present bit is 0, raise a page fault.\n3. The PDE points to a page table. Use the PT index to select a page-table entry (PTE). If the PTE's present bit is 0, raise a page fault.\n4. The PTE points to a physical frame. Combine the frame's base address with the 12-bit offset to form the physical address.\n\nThe advantage is sparsity: a process that uses only a few megabytes of address space needs only a handful of page tables, not the full 4 MiB. The disadvantage is that every memory access now requires up to three memory reads (PDE, PTE, data) instead of one. That is where the TLB comes in.\n\n### 12.2.2 Worked Example: Translating a 32-bit Address\n\nSuppose CR3 = `0x00001000` (page directory at physical address 0x1000). The virtual address is `0x00403ABC`.\n\nBreak it down",
+      "finish": "length",
+      "metrics": {
+        "input_tokens": 36868,
+        "cache_hit_tokens": 36866,
+        "cache_hit_rate": 0.999946,
+        "prefill_tokens": 2,
+        "cache_stored_blocks": 1,
+        "cache_stored_tokens": 2,
+        "cache_lookup_seconds": 0.028162,
+        "cache_load_seconds": 0.084005,
+        "model_prefill_seconds": 0.308183,
+        "cache_store_seconds": 0.000109,
+        "cache_store_drain_seconds": 0.000249,
+        "chunks": 1,
+        "output_tokens": 1024,
+        "queue_wait_seconds": 0.010723451152443886,
+        "time_to_first_token_seconds": 0.463839,
+        "decode_seconds": 11.902378,
+        "total_seconds": 12.366217,
+        "decode_tps": 86.00742107141528,
+        "decode_steps": 354,
+        "accepted_tokens": 669,
+        "decode_batch_steps": {
+          "1": 354
+        },
+        "prefill_stall_seconds": 9.949319064617157e-05,
+        "wall_ms_per_step": 33.63262531531733,
+        "control_ms_per_step": 0.49377013376708756,
+        "model_step_host_ms": 33.07267593083072,
+        "stop_reason": "length",
+        "mtp_accepted_per_step": 1.89,
+        "decode_tokens_per_step": 2.893,
+        "reasoning_effort": "off"
+      },
+      "usage": {
+        "prompt_tokens": 36868,
+        "completion_tokens": 1024,
+        "total_tokens": 37892,
+        "prompt_tokens_details": {
+          "cached_tokens": 36866
+        }
+      },
+      "ok": true,
+      "wall_s": 12.638135805726051,
+      "context_target": 36864,
+      "repeat": 2,
+      "valid_perf": true
+    }
+  ],
+  "synthetic_leaf": [
+    {
+      "op": "index_score_top512",
+      "ratio": 2,
+      "context": 512,
+      "us": 30.27484379708767,
+      "samples_us": [
+        30.45078180730343,
+        30.47250024974346,
+        30.014844611287117,
+        30.108125880360603,
+        29.706718400120735,
+        30.441561713814735,
+        29.977187514305115,
+        30.52937425673008
+      ],
+      "capacity": 262144
+    },
+    {
+      "op": "index_score_top512",
+      "ratio": 2,
+      "context": 8192,
+      "us": 41.70671850442886,
+      "samples_us": [
+        41.893281042575836,
+        41.592031717300415,
+        41.9943742454052,
+        41.281718760728836,
+        41.83140769600868,
+        41.37296974658966,
+        41.82140529155731,
+        41.47937521338463
+      ],
+      "capacity": 262144
+    },
+    {
+      "op": "index_score_top512",
+      "ratio": 2,
+      "context": 36864,
+      "us": 64.39406424760818,
+      "samples_us": [
+        64.13109600543976,
+        65.23453444242477,
+        64.22531604766846,
+        64.56281244754791,
+        64.0515610575676,
+        64.68202918767929,
+        64.03578072786331,
+        65.07296860218048
+      ],
+      "capacity": 262144
+    },
+    {
+      "op": "index_score_top512",
+      "ratio": 2,
+      "context": 131072,
+      "us": 104.45593670010567,
+      "samples_us": [
+        104.93359714746475,
+        104.35640811920166,
+        104.99062389135361,
+        104.55546528100967,
+        104.91874814033508,
+        104.05265539884567,
+        103.97515445947647,
+        103.52843999862671
+      ],
+      "capacity": 262144
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 2,
+      "context": 512,
+      "selection": "contiguous",
+      "selected": 256,
+      "us": 78.75460758805275,
+      "samples_us": [
+        78.81374657154083,
+        78.6735936999321,
+        78.72843742370605,
+        78.72718572616577,
+        78.77671718597412,
+        78.75999808311462,
+        78.75968515872955,
+        78.74953001737595
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 2,
+      "context": 8192,
+      "selection": "contiguous",
+      "selected": 512,
+      "us": 120.74609473347664,
+      "samples_us": [
+        120.87703496217728,
+        120.72625011205673,
+        120.81406265497208,
+        120.71827799081802,
+        120.77125161886215,
+        120.71296572685242,
+        120.76593935489655,
+        120.69296836853027
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 2,
+      "context": 36864,
+      "selection": "contiguous",
+      "selected": 512,
+      "us": 120.73906511068344,
+      "samples_us": [
+        120.8692193031311,
+        120.66750228404999,
+        120.77734619379044,
+        120.67046761512756,
+        120.68015336990356,
+        120.72890996932983,
+        120.82672119140625,
+        120.74922025203705
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 2,
+      "context": 131072,
+      "selection": "contiguous",
+      "selected": 512,
+      "us": 120.65796926617622,
+      "samples_us": [
+        120.70327997207642,
+        120.66109478473663,
+        120.60265988111496,
+        120.65484374761581,
+        120.62390893697739,
+        120.6807792186737,
+        120.61437219381332,
+        120.69015949964523
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 2,
+      "context": 512,
+      "selection": "scattered",
+      "selected": 256,
+      "us": 82.63210952281952,
+      "samples_us": [
+        82.63874799013138,
+        82.59593695402145,
+        82.66124874353409,
+        82.60375261306763,
+        82.62547105550766,
+        82.70140737295151,
+        82.7053114771843,
+        82.60530978441238
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 2,
+      "context": 8192,
+      "selection": "scattered",
+      "selected": 512,
+      "us": 128.77719104290009,
+      "samples_us": [
+        128.69422137737274,
+        128.7878155708313,
+        128.71578335762024,
+        128.81000339984894,
+        128.69547307491302,
+        128.853902220726,
+        128.76656651496887,
+        128.87921929359436
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 2,
+      "context": 36864,
+      "selection": "scattered",
+      "selected": 512,
+      "us": 129.7164037823677,
+      "samples_us": [
+        129.55109775066376,
+        129.76936995983124,
+        129.59718704223633,
+        129.7551542520523,
+        129.65141236782074,
+        129.81827557086945,
+        129.6776533126831,
+        129.83828783035278
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 2,
+      "context": 131072,
+      "selection": "scattered",
+      "selected": 512,
+      "us": 132.81210511922836,
+      "samples_us": [
+        132.81390070915222,
+        132.80265033245087,
+        132.80905783176422,
+        132.77436792850494,
+        132.82141089439392,
+        132.85265862941742,
+        132.8103095293045,
+        132.8151524066925
+      ]
+    },
+    {
+      "op": "index_score_top512",
+      "ratio": 1,
+      "context": 512,
+      "us": 31.95718675851822,
+      "samples_us": [
+        31.879998743534088,
+        31.739842146635056,
+        31.68046846985817,
+        32.20484405755997,
+        31.795624643564224,
+        32.631248235702515,
+        32.44046866893768,
+        32.03437477350235
+      ],
+      "capacity": 524288
+    },
+    {
+      "op": "index_score_top512",
+      "ratio": 1,
+      "context": 8192,
+      "us": 52.84023471176624,
+      "samples_us": [
+        53.04671823978424,
+        52.4856261909008,
+        53.05999889969826,
+        52.62281373143196,
+        53.05546894669533,
+        52.633751183748245,
+        53.172968327999115,
+        52.39421874284744
+      ],
+      "capacity": 524288
+    },
+    {
+      "op": "index_score_top512",
+      "ratio": 1,
+      "context": 36864,
+      "us": 81.98507502675056,
+      "samples_us": [
+        81.53843879699707,
+        82.01999962329865,
+        81.48906379938126,
+        82.01125264167786,
+        82.00155943632126,
+        82.10937678813934,
+        81.87781274318695,
+        81.96859061717987
+      ],
+      "capacity": 524288
+    },
+    {
+      "op": "index_score_top512",
+      "ratio": 1,
+      "context": 131072,
+      "us": 150.85531026124954,
+      "samples_us": [
+        150.90249478816986,
+        150.2149999141693,
+        151.36265754699707,
+        150.80812573432922,
+        152.03078091144562,
+        151.4882743358612,
+        150.80125629901886,
+        150.46530961990356
+      ],
+      "capacity": 524288
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 1,
+      "context": 512,
+      "selection": "contiguous",
+      "selected": 512,
+      "us": 118.84031444787979,
+      "samples_us": [
+        118.84968727827072,
+        118.72547119855881,
+        118.74374747276306,
+        118.86171996593475,
+        118.7685951590538,
+        118.846096098423,
+        118.89249831438065,
+        118.83453279733658
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 1,
+      "context": 8192,
+      "selection": "contiguous",
+      "selected": 512,
+      "us": 118.69999766349792,
+      "samples_us": [
+        118.6065599322319,
+        118.77953261137009,
+        118.64250153303146,
+        118.74406039714813,
+        118.62906068563461,
+        118.81156265735626,
+        118.65593492984772,
+        118.80593746900558
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 1,
+      "context": 36864,
+      "selection": "contiguous",
+      "selected": 512,
+      "us": 118.73578280210495,
+      "samples_us": [
+        118.70390921831131,
+        118.68827790021896,
+        118.69499832391739,
+        118.73984336853027,
+        118.73172223567963,
+        118.75656247138977,
+        118.78140270709991,
+        118.81640553474426
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 1,
+      "context": 131072,
+      "selection": "contiguous",
+      "selected": 512,
+      "us": 118.7414862215519,
+      "samples_us": [
+        118.72968822717667,
+        118.75968426465988,
+        118.68437379598618,
+        118.75328421592712,
+        118.69187653064728,
+        118.85374784469604,
+        118.79140883684158,
+        118.70953440666199
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 1,
+      "context": 512,
+      "selection": "scattered",
+      "selected": 512,
+      "us": 127.40921974182129,
+      "samples_us": [
+        127.41531431674957,
+        127.35062837600708,
+        127.403125166893,
+        127.378910779953,
+        127.48797237873077,
+        127.46202945709229,
+        127.64328718185425,
+        127.38999724388123
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 1,
+      "context": 8192,
+      "selection": "scattered",
+      "selected": 512,
+      "us": 127.43905931711197,
+      "samples_us": [
+        127.4360865354538,
+        127.40999460220337,
+        127.44203209877014,
+        127.38281488418579,
+        127.44937837123871,
+        127.51531600952148,
+        127.4295300245285,
+        127.49281525611877
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 1,
+      "context": 36864,
+      "selection": "scattered",
+      "selected": 512,
+      "us": 128.04921716451645,
+      "samples_us": [
+        128.07203829288483,
+        127.9296875,
+        128.06546688079834,
+        127.93530523777008,
+        128.0868798494339,
+        128.03296744823456,
+        128.1578093767166,
+        127.9560923576355
+      ]
+    },
+    {
+      "op": "csa_q6",
+      "ratio": 1,
+      "context": 131072,
+      "selection": "scattered",
+      "selected": 512,
+      "us": 131.26663863658905,
+      "samples_us": [
+        131.22327625751495,
+        131.2265694141388,
+        131.2428116798401,
+        131.2199980020523,
+        131.30952417850494,
+        131.290465593338,
+        131.34343922138214,
+        131.48827850818634
+      ]
+    }
+  ],
+  "limits": [
+    "No old-version A/B in this experiment",
+    "Leaf uses synthetic tensors and repeated graph replay; not an additive production profile",
+    "VendorIndexer includes score, reduction and top512; topk alone not isolated",
+    "CSA synthetic IDs identical across six query rows, fixed per case; cache locality differs from real workloads",
+    "Short context grows by 1024 tokens during output; context is initial prefix length"
+  ]
+}

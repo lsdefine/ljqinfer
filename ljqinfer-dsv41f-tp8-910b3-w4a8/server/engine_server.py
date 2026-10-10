@@ -50,7 +50,8 @@ def generate(body: dict):
             raise HTTPException(409, "duplicate request_id")
         try:
             queue = strategy.query(input_ids, max_new, temperature,
-                                   images=body.get("images"))
+                                   images=body.get("images"),
+                                   thinking_budget_tokens=body.get("thinking_budget_tokens"))
         except (KeyError, TypeError, ValueError) as exc:
             raise HTTPException(400, "invalid request: %s" % exc)
         _state["handles"][request_id] = queue.cancel_handle

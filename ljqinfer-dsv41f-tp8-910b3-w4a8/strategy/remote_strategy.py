@@ -39,13 +39,13 @@ class RemoteStrategy:
         except (requests.RequestException, ValueError) as exc:
             raise BackendUnavailable("V4.1 generation backend is not ready") from exc
 
-    def query(self, input_ids, max_new_tokens, temperature=1.0, images=None):
+    def query(self, input_ids, max_new_tokens, temperature=1.0, images=None, thinking_budget_tokens=None):
         out, rid = Queue(), "rpc_" + uuid.uuid4().hex[:16]
         response = requests.post(f"{self.base}/generate", stream=True,
             json={"request_id": rid, "input_ids": list(input_ids),
                   "max_new_tokens": max_new_tokens,
                   "temperature": temperature,
-                  "images": images}, timeout=(3, 300))
+                  "images": images, "thinking_budget_tokens": thinking_budget_tokens}, timeout=(3, 300))
         if 400 <= response.status_code < 500:
             # The engine rejected the request itself (too long, bad ids...).
             # Raise ValueError so the service layer answers 400, not 500.

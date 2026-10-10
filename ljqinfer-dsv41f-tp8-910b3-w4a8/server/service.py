@@ -301,14 +301,10 @@ class ServiceLayer:
                 enable = kind == "enabled"
                 explicitly_disabled = kind == "disabled"
             if thinking.get("budget_tokens") is not None:
-                try:
-                    budget = int(thinking["budget_tokens"])
-                except (TypeError, ValueError):
+                budget = thinking["budget_tokens"]
+                if type(budget) is not int or not 0 <= budget <= 2**31 - 1:
                     raise ServiceError(
-                        "'thinking.budget_tokens' must be an integer")
-                if budget < 0:
-                    raise ServiceError(
-                        "'thinking.budget_tokens' must not be negative")
+                        "'thinking.budget_tokens' must be an integer within 0..2147483647")
                 if budget == 0:
                     enable = False
                     explicitly_disabled = True
@@ -360,6 +356,10 @@ class ServiceLayer:
         if clear_thinking is None:
             clear_thinking = True          # template default: keep only the
                                            # current turn's reasoning
+
+        # Default the soft thinking budget to 90% of the effective output limit.
+        if enable and budget is None:
+            budget = max_tokens * 9 // 10
 
         if enable and budget is not None and budget > 0 and budget >= max_tokens:
             raise ServiceError(
@@ -448,6 +448,7 @@ class ServiceLayer:
         if max_tokens <= 0:
             raise ServiceError("'max_tokens' must be positive")
 
+        max_tokens = min(max_tokens, self.max_output_tokens)
         thinking = self._thinking_options(request, max_tokens)
 
         temperature = request.get("temperature")
@@ -466,7 +467,7 @@ class ServiceLayer:
 
         plan = {"messages": messages,
                 "tools": self._normalise_tools(request.get("tools")),
-                "max_tokens": min(max_tokens, self.max_output_tokens),
+                "max_tokens": max_tokens,
                 "temperature": temperature,
                 "temperature_requested": temperature_requested,
                 "model": request.get("model") or self.model_name}
@@ -649,7 +650,8 @@ class ServiceLayer:
         try:
             return self._strategy.query(input_ids, plan["max_tokens"],
                                         plan["temperature"],
-                                        images=plan.get("images"))
+                                        images=plan.get("images"),
+                                        thinking_budget_tokens=plan.get("thinking_budget_tokens"))
         except ValueError as exc:
             raise ServiceError(str(exc))
 

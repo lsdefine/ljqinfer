@@ -453,7 +453,8 @@ class ServiceLayer:
 
         temperature = request.get("temperature")
         try:
-            temperature = 0.0 if temperature is None else float(temperature)
+            # Match released sampling defaults; explicit zero remains greedy.
+            temperature = 1.0 if temperature is None else float(temperature)
         except (TypeError, ValueError):
             raise ServiceError("'temperature' must be a number")
         # The decode engine ships two verified sampling modes only: greedy

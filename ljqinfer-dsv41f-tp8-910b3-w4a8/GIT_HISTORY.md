@@ -6149,3 +6149,15 @@ fix: default thinking budget to 90 percent of effective output limit
 ```text
 deploy: restore A2-3 frontend to port 8000
 ```
+
+---
+
+```text
+serve: isolate A2-3 on 8001 for repetition diagnosis
+```
+
+---
+
+```text
+fix: default omitted temperature to sampling and restore service port
+```

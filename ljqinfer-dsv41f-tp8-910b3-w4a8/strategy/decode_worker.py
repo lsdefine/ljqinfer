@@ -944,13 +944,13 @@ MODEL_ROOT = '/data/models/DeepSeek-V4.1-Flash'
 POOL_TOKENS, SLOTS, MAX_SEQ = 2 << 20, 4, 1 << 20
 CHUNK, REPLAY, MAX_BATCH = 8192, 128, 4
 COLD_NAMESPACE = 'dsv41f-w4a8-tp8'
-COLD_BYTES_DEFAULT = 50 << 30
+COLD_CACHE_BYTES = 50 << 30
 
 
 def cold_budget_bytes():
     """Total rank-zero host budget for the cold prefix store; 0 disables caching."""
     import os
-    return int(os.environ.get('LJQINFER_COLD_BYTES', COLD_BYTES_DEFAULT))
+    return int(os.environ.get('LJQINFER_COLD_BYTES', COLD_CACHE_BYTES))
 # NZ TP8 full-geometry decode uses 1933579664 caller-owned tensor bytes.
 # Keep 3 GiB outside the ledger for native/graph pools.
 DECODE_RESERVE_BYTES = (3 << 30) - (96 << 20)

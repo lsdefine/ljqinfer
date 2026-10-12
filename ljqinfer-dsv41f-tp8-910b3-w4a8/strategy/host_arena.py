@@ -31,6 +31,9 @@ def _aligned(nbytes):
     return (int(nbytes) + _ALIGN - 1) // _ALIGN * _ALIGN
 
 
+from strategy.cold_kv_core import ArenaCapacityError
+
+
 class HostArena:
     """Byte-addressed pool of page-locked host memory.
 
@@ -92,7 +95,7 @@ class HostArena:
                         self.used_bytes += want
                         return index * self.segment_bytes + offset
                 if not self._grow():
-                    raise MemoryError(
+                    raise ArenaCapacityError(
                         'host arena exhausted: %d of %d bytes in use'
                         % (self.used_bytes, self.capacity))
 

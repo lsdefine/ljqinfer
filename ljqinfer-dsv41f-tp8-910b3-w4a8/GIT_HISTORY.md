@@ -6161,3 +6161,9 @@ serve: isolate A2-3 on 8001 for repetition diagnosis
 ```text
 fix: default omitted temperature to sampling and restore service port
 ```
+
+---
+
+```text
+fix: sync A2-2 cold cache core and bounded prefix branch eviction
+```

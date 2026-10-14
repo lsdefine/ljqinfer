@@ -1,0 +1,258 @@
+{
+  "runs": [
+    {
+      "run": 0,
+      "case": "ctx36864",
+      "label": "A",
+      "warmup": true,
+      "mean_ms": 33.3025032967033,
+      "median_ms": 32.699605000000005,
+      "tokens_per_step": 2.763440860215054
+    },
+    {
+      "run": 1,
+      "case": "ctx36864",
+      "label": "B",
+      "warmup": true,
+      "mean_ms": 32.963532892957744,
+      "median_ms": 32.397042,
+      "tokens_per_step": 2.8236914600550964
+    },
+    {
+      "run": 2,
+      "case": "ctx36864",
+      "label": "A",
+      "warmup": false,
+      "mean_ms": 33.15588522751323,
+      "median_ms": 32.805851000000004,
+      "tokens_per_step": 2.650259067357513
+    },
+    {
+      "run": 3,
+      "case": "ctx36864",
+      "label": "B",
+      "warmup": false,
+      "mean_ms": 32.66663665811966,
+      "median_ms": 32.422422,
+      "tokens_per_step": 2.852367688022284
+    },
+    {
+      "run": 4,
+      "case": "ctx36864",
+      "label": "B",
+      "warmup": false,
+      "mean_ms": 33.50951128132992,
+      "median_ms": 32.647275,
+      "tokens_per_step": 2.568922305764411
+    },
+    {
+      "run": 5,
+      "case": "ctx36864",
+      "label": "A",
+      "warmup": false,
+      "mean_ms": 33.436340335135135,
+      "median_ms": 32.721095,
+      "tokens_per_step": 2.7063492063492065
+    },
+    {
+      "run": 6,
+      "case": "ctx36864",
+      "label": "B",
+      "warmup": false,
+      "mean_ms": 32.44704083701657,
+      "median_ms": 32.357346,
+      "tokens_per_step": 2.764864864864865
+    },
+    {
+      "run": 7,
+      "case": "ctx36864",
+      "label": "A",
+      "warmup": false,
+      "mean_ms": 32.88085207103825,
+      "median_ms": 32.768209999999996,
+      "tokens_per_step": 2.735294117647059
+    },
+    {
+      "run": 8,
+      "case": "ctx36864",
+      "label": "A",
+      "warmup": false,
+      "mean_ms": 32.82280065012407,
+      "median_ms": 32.690495,
+      "tokens_per_step": 2.4987834549878345
+    },
+    {
+      "run": 9,
+      "case": "ctx36864",
+      "label": "B",
+      "warmup": false,
+      "mean_ms": 32.70329929971989,
+      "median_ms": 32.535013,
+      "tokens_per_step": 2.802739726027397
+    },
+    {
+      "run": 10,
+      "case": "ctx131072",
+      "label": "A",
+      "warmup": true,
+      "mean_ms": 33.72800036740332,
+      "median_ms": 33.415938,
+      "tokens_per_step": 2.764864864864865
+    },
+    {
+      "run": 11,
+      "case": "ctx131072",
+      "label": "B",
+      "warmup": true,
+      "mean_ms": 33.32008189969605,
+      "median_ms": 33.12912,
+      "tokens_per_step": 3.035608308605341
+    },
+    {
+      "run": 12,
+      "case": "ctx131072",
+      "label": "A",
+      "warmup": false,
+      "mean_ms": 34.06760994206549,
+      "median_ms": 33.564945,
+      "tokens_per_step": 2.5308641975308643
+    },
+    {
+      "run": 13,
+      "case": "ctx131072",
+      "label": "B",
+      "warmup": false,
+      "mean_ms": 33.231823365591396,
+      "median_ms": 33.038294,
+      "tokens_per_step": 2.7
+    },
+    {
+      "run": 14,
+      "case": "ctx131072",
+      "label": "B",
+      "warmup": false,
+      "mean_ms": 33.30924545343137,
+      "median_ms": 33.17782,
+      "tokens_per_step": 2.4591346153846154
+    },
+    {
+      "run": 15,
+      "case": "ctx131072",
+      "label": "A",
+      "warmup": false,
+      "mean_ms": 33.54342718567639,
+      "median_ms": 33.376382,
+      "tokens_per_step": 2.657142857142857
+    },
+    {
+      "run": 16,
+      "case": "ctx131072",
+      "label": "B",
+      "warmup": false,
+      "mean_ms": 33.44415872727273,
+      "median_ms": 33.256032,
+      "tokens_per_step": 2.7681940700808627
+    },
+    {
+      "run": 17,
+      "case": "ctx131072",
+      "label": "A",
+      "warmup": false,
+      "mean_ms": 33.67935771282051,
+      "median_ms": 33.472879000000006,
+      "tokens_per_step": 2.577889447236181
+    },
+    {
+      "run": 18,
+      "case": "ctx131072",
+      "label": "A",
+      "warmup": false,
+      "mean_ms": 34.13472132637076,
+      "median_ms": 33.420084,
+      "tokens_per_step": 2.6163682864450126
+    },
+    {
+      "run": 19,
+      "case": "ctx131072",
+      "label": "B",
+      "warmup": false,
+      "mean_ms": 33.553295703910614,
+      "median_ms": 33.275272,
+      "tokens_per_step": 2.797814207650273
+    }
+  ],
+  "summary": {
+    "ctx131072": {
+      "A": {
+        "n": 4,
+        "mean_ms": 33.85627904173329,
+        "median_ms": 33.4585725,
+        "tokens_per_step": 2.5955661970887287
+      },
+      "B": {
+        "n": 4,
+        "mean_ms": 33.38463081255153,
+        "median_ms": 33.186854499999995,
+        "tokens_per_step": 2.681285723278938
+      }
+    },
+    "ctx36864": {
+      "A": {
+        "n": 4,
+        "mean_ms": 33.07396957095267,
+        "median_ms": 32.74641275,
+        "tokens_per_step": 2.647671461585403
+      },
+      "B": {
+        "n": 4,
+        "mean_ms": 32.831622019046506,
+        "median_ms": 32.490514,
+        "tokens_per_step": 2.747223646169739
+      }
+    }
+  },
+  "evidence_root": "/data/workspace/decode_half_consumers",
+  "baseline": "5b36621",
+  "rank_validation": {
+    "0": 20,
+    "1": 20,
+    "2": 20,
+    "3": 20,
+    "4": 20,
+    "5": 20,
+    "6": 20,
+    "7": 20
+  },
+  "service": {
+    "complete": true,
+    "semantic_cases": 3,
+    "concurrent_requests": [
+      2,
+      3,
+      4
+    ],
+    "observed_batch_widths": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "scope": "Same-process full engine ABBA/BAAB, 4 measured runs per label/context plus warmups. Temperature 1, production capture. Not deterministic end-to-end token equality or independent-restart performance acceptance.",
+  "all_steps": {
+    "ctx131072": {
+      "A": 33.86023724946968,
+      "B": 33.406399038342855
+    },
+    "ctx36864": {
+      "A": 33.07890317625511,
+      "B": 32.832976161773814
+    }
+  },
+  "sha256": {
+    "engine_ab/summary.json": "5d3b1b609e700fc42db9cc8313f03372ef6c0d6c0dda93d0149061422dcb7250",
+    "service_acceptance.json": "64c906a49fbd835c2c79e66b03e6f42ee661e1dd54b51c0b8218ac0622664ed2",
+    "integration/regression.log": "a6fdcc03f9965973364734018b826b4e6c06f4da2b5af2815fd812547fe660ac",
+    "production_chain.py": "da2f298db7d3d5999ba47151d1735d8c055fff525abf91b2379d54ee604f66e5"
+  }
+}

@@ -29,8 +29,9 @@ class _Acl:
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._bind()
+            instance = super().__new__(cls)
+            instance._bind()
+            cls._instance = instance
         return cls._instance
 
     def _bind(self):
@@ -76,19 +77,28 @@ class VendorIndexer:
 
     def __init__(self, query, key, weights, seq_query, seq_key, block_table,
                  indices, sparse_count, *, sparse_mode=3):
-        import torch
-        self.acl = _Acl()
-        self.indices = indices
-        self.sparse_count = int(sparse_count)
-        self.sparse_mode = int(sparse_mode)
-        self.operands = (query, key, weights, seq_query, seq_key, block_table)
-        # Values are never produced under PA_BSND but the op still type-checks
-        # the output descriptor, so a one-element bf16 stub is handed over.
-        self.values = torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16,
-                                  device=query.device)
-        self.workspace = None
+        self.handles = []
         self.executor = C.c_void_p()
-        self._prepare()
+        self.workspace = self.values = None
+        try:
+            import torch
+            self.acl = _Acl()
+            self.indices = indices
+            self.sparse_count = int(sparse_count)
+            self.sparse_mode = int(sparse_mode)
+            self.operands = (query, key, weights, seq_query, seq_key, block_table)
+            # Values are never produced under PA_BSND but the op still type-checks
+            # the output descriptor, so a one-element bf16 stub is handed over.
+            self.values = torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16,
+                                      device=query.device)
+            self._prepare()
+        except BaseException:
+            # Rollback must not replace the construction failure.
+            try:
+                self.close()
+            except BaseException:
+                pass
+            raise
 
     def _prepare(self):
         import torch
@@ -96,8 +106,8 @@ class VendorIndexer:
         # aclnn tensor descriptors must outlive the executor, and the executor
         # is single-shot unless marked repeatable; both are kept on the plan so
         # one plan can be dispatched every decode step without rebuilding.
-        self.handles = [acl.tensor(t) for t in self.operands]
-        self.handles.extend((acl.tensor(self.indices), acl.tensor(self.values)))
+        for tensor in (*self.operands, self.indices, self.values):
+            self.handles.append(acl.tensor(tensor))
         handles = self.handles[:6]
         status = acl.workspace(*handles, b'BSND', b'PA_BSND', self.sparse_count,
                                self.sparse_mode, _INT64_MAX, _INT64_MAX, False,
@@ -126,13 +136,29 @@ class VendorIndexer:
         return self.indices
 
     def close(self):
-        destroy = self.acl.base.aclDestroyAclOpExecutor
-        destroy.argtypes, destroy.restype = [C.c_void_p], C.c_int
-        if self.executor:
-            destroy(self.executor)
-            self.executor = C.c_void_p()
-        destroy = self.acl.base.aclDestroyTensor
-        destroy.argtypes, destroy.restype = [C.c_void_p], C.c_int
-        for handle in reversed(self.handles):
-            destroy(handle)
-        self.handles.clear()
+        error = None
+
+        def destroy(name, handle):
+            nonlocal error
+            try:
+                fn = getattr(self.acl.base, name)
+                fn.argtypes, fn.restype = [C.c_void_p], C.c_int
+                status = fn(handle)
+                if status:
+                    raise RuntimeError(f'{name} failed: {status}')
+            except BaseException as exc:
+                if error is None:
+                    error = exc
+
+        # Detach before attempting destruction: even failed cleanup is not retried.
+        executor = getattr(self, 'executor', None)
+        self.executor = C.c_void_p()
+        if executor:
+            destroy('aclDestroyAclOpExecutor', executor)
+        handles = getattr(self, 'handles', [])
+        while handles:
+            destroy('aclDestroyTensor', handles.pop())
+        self.workspace = self.values = self.indices = None
+        self.operands = ()  # Drop references, never free caller-owned tensors.
+        if error is not None:
+            raise error

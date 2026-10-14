@@ -29,20 +29,29 @@ def _overlaps(a, b):
 
 class W4A8GroupedMatmul:
     def __init__(self, x, weight, scale, bias, ends, out, *, quantized, counts,
-                 raw_quantized, token_scale, projected):
+                 raw_quantized, token_scale, projected=None):
         e, k, n = ends.numel(), x.shape[-1], out.shape[-1]
         m, kp = x.shape[0], (k+63)//64*64
+        if out.dtype not in (torch.float16, torch.bfloat16):
+            raise ValueError('projection output must be FP16 or BF16')
+        if out.dtype == torch.float16:
+            if projected is not None:
+                raise ValueError('FP16 output is the projection storage itself')
+            projected = out
+        elif projected is None:
+            raise ValueError('BF16 output needs caller-owned FP16 projection storage')
         specs = ((x, (m,k), torch.bfloat16),
                  (weight, (e,kp,n//8), torch.int32),
                  (scale, (e,1,n), torch.int64),
                  (bias, (e,n), torch.float32),
                  (ends, (e,), torch.int64),
-                 (out, (m,n), torch.bfloat16),
+                 (out, (m,n), out.dtype),
                  (quantized, (m,kp), torch.int8),
                  (counts, (e,), torch.int64),
                  (raw_quantized, (m,k), torch.int8),
-                 (token_scale, (m,), torch.float32),
-                 (projected, (m,n), torch.float16))
+                 (token_scale, (m,), torch.float32))
+        if projected is not out:
+            specs += ((projected, (m,n), torch.float16),)
         if e not in (128,384) or (k,n) not in ((5120,576),(288,5120)) or m <= 0:
             raise ValueError('unsupported decode expert geometry')
         for tensor, shape, dtype in specs:
@@ -144,7 +153,10 @@ class W4A8GroupedMatmul:
         if status:
             raise RuntimeError(f'decode input preparation failed: {status}')
         self._launch(1, stream, workspace)
-        self.storage[2].copy_(self.projected)
+        # Fixed at construction/capture: target consumers take FP16 directly;
+        # draft consumers retain their existing BF16 rounding boundary.
+        if self.storage[2] is not self.projected:
+            self.storage[2].copy_(self.projected)
         return self.storage[2]
 
 

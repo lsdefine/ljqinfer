@@ -9,7 +9,7 @@
 - OpenAI `/v1/chat/completions`、Anthropic `/v1/messages`，支持普通和流式输出。
 - 图片使用 base64 Data URL；含图请求跳过主存前缀缓存。
 - 模型名 `deepseek-v41-flash`，默认 API key：`devkey`。
-- 未传 `temperature`（或传 `null`）默认 `1`；显式 `0` 保留贪心，显式 `1` 为全分布采样。
+- 未传 `temperature`（或传 `null`）默认 `1`；显式 `0` 保留贪心，显式 `1` 启用采样，支持 `top_p`（例如0.95）；`top_p=1` 为全分布采样。
 
 ## 运行
 
@@ -33,7 +33,16 @@ API 端口 `8000`，引擎 RPC `127.0.0.1:62001`；日志位于 `/data/logs/`。
 - 5分钟服务观察59次主动请求全部成功；16项索引边界回归、6项完整生成语义用例通过。此结论不等于与旧实现logits逐位一致。
 - 部署必须使用本机 CANN 9.0.1 + torch/torch_npu 2.10 环境；同步源码同时更新匹配的 AscendC 产物（本轮 `ops/kernels/libhc.so` 已变化）。主机JIT桥接扩展由新源码在本机重建；不拷贝权重/GMM缓存。
 
-## A2-1 / A2-2 / A2-3 当前部署
+## 当前发布（7dfd7d4）
+
+2026-10-14：A2-1、A2-2、A2-3统一来源 `7dfd7d4`，API均使用8000。三机165项来源文件SHA256全部一致；A2-1/A2-2在本机重编sampling、norm、attention三份AscendC库后重启加载，旧文件留有回滚备份。
+
+- 包含低开销top-p、decode资源生命周期整理和FP16投影消费者融合；官方CANN GMM保持不变，BF16舍入语义保留。
+- 每机8次真实API验收通过（合计24次）：temperature=1、top_p=0.95，OpenAI/Anthropic普通与流式各一次，以及四路并发生成。
+- A2-3此前整步对照：36k平均33.074→32.832ms，131k平均33.856→33.385ms。每组4轮非预热样本，仅代表该次对照；本次跨机发布未重做长上下文性能基准。
+- 回归、统计口径及边界见 `reports/decode_half_consumers.md`、`.json`；部署备份和API证据位于各机 `/data/workspace/release_7dfd7d4/`（A2-3仅含发布验收）。
+
+## 历史部署（1f05dd3）
 
 A2-2 的冷缓存改动已纳入来源提交 `1f05dd3`：缓存核心与 Torch 适配层分离，修复前缀分支对祖先存储的淘汰约束，完善异步读写等待和容量异常分类；50 GiB 默认容量不变。默认温度继续为1，API端口保持8000。 A2-3与A2-1均已重启加载并通过5项核心契约回归、缓存回归、8K共享前缀分支命中、四路并发及双协议普通/流式验收；A2-2保留原运行实例，三机五个迁移文件逐字节一致。此前 `3200fb4` 同步的154项源码、43项运行产物（合计195个唯一路径）已通过哈希核验，旧实例保留备份。
 
@@ -52,5 +61,5 @@ A2-2 的冷缓存改动已纳入来源提交 `1f05dd3`：缓存核心与 Torch �
 
 ## 来源
 
-源提交 `1f05dd32deb839ea2189c577d58c05dd1dd5deef`；归档默认 key 调整为 `devkey`。
-速度见[主 README](../README.md)（历史实测口径未变），479 条开发提交消息见 [GIT_HISTORY.md](GIT_HISTORY.md)。
+源提交 `7dfd7d49ef50abcf7ba608c1c29bf23c8a0ab343`；归档默认 key 调整为 `devkey`。
+速度见[主 README](../README.md)（历史实测口径未变），487 条开发提交消息见 [GIT_HISTORY.md](GIT_HISTORY.md)。

@@ -294,7 +294,7 @@ class NativeDecode:
                     p.prefetch.upload(self.stream)
                     p.checked.zero_()
                     for name,run in (('graph',p.verify),('seed_graph',p.seed),
-                                     ('draft_graph',p.propose)):
+                                     ('draft_graph',p.propose),('sample_graph',p.sample)):
                         run()
                         self.stream.synchronize()
                         graph = torch.npu.NPUGraph()
@@ -313,6 +313,25 @@ class NativeDecode:
             finally:
                 self.parallel._call('HcclSetConfig', 0, reduction_policy.value)
         return self
+
+    def sample_prefill(self, logits, temperature, *, producer_stream):
+        """Same nucleus policy for the first token, using startup B1 resources."""
+        import torch
+        self._idle()
+        p = self.plans[1]
+        self.stream.wait_stream(producer_stream)
+        with torch.npu.stream(self.stream):
+            lo = self.parallel.rank * 16160
+            p.head.logits.copy_(logits.reshape(-1, 129280)[-1:, lo:lo + 16160].expand(6, -1))
+            p.temp.fill_(temperature)
+            p.end_bias.zero_()
+            p.sample_graph.replay()
+            p.host_sample.copy_(p.greedy, non_blocking=True)
+        self.stream.synchronize()
+        token = int(p.host_sample[0, 0])
+        if not 0 <= token < 129280:
+            raise RuntimeError('invalid prefill sample')
+        return token
 
     def seed_prefill(self, *, slot, anchor, main_hidden, producer_stream):
         """Admit the canonical CED tail, right-shifted into draft rings.
@@ -504,7 +523,7 @@ class DecodeBatch:
         self.owner, self.batch, self.graph = owner, batch, None
         self.layers, self.sources, self.engrams, self.targets = [], {}, {}, {}
         self.head = self.draft = None
-        self.seed_graph = self.draft_graph = None
+        self.seed_graph = self.draft_graph = self.sample_graph = None
         self.shared_stream = torch.npu.Stream(device=owner.weights.device)
         self.hc_stream = torch.npu.Stream(device=owner.weights.device)
         self.engram_stream = torch.npu.Stream(device=owner.weights.device)
@@ -645,17 +664,12 @@ class DecodeBatch:
             norm_library=norm,eps=c['norm_eps'],
             projection_input=(a((r,5120),fp)
                               if o.weights['head.weight'].dtype == fp else None))
-        size = window.dec_greedy_workspace_bytes
-        size.argtypes, size.restype = [U], C.c_uint64
-        self.partial, self.pair, self.gathered = a((size(b),),torch.uint8),a((r,2),fp),a((8,r,2),fp)
-        greedy = _function(window,'dec_sample_bias_tp8',[P]*11+[U]*3)
+        from ops.decode.sampling import TopPSampler
+        self.top_p = TopPSampler(b, a, parallel, self.temp, self.sample_seed,
+                                self.end_bias, self.greedy)
+        self.host_sample = torch.empty((b,6), dtype=ix, device='cpu', pin_memory=True)
         accept = _function(window,'dec_accept',[P]*5+[U]*2)
-        comm = parallel.comm.value if isinstance(parallel.comm,P) else parallel.comm
-        self.greedy_fn, self.accept_fn = greedy, accept
-        self.greedy_args = tuple(P(t.data_ptr()) for t in
-            (self.head.logits,self.partial,self.pair,self.gathered,self.greedy,
-             self.temp,self.sample_seed,self.end_bias)) + (
-                P(comm),C.cast(parallel.lib.HcclAllGather,P),b,parallel.rank,8)
+        self.accept_fn = accept
         self.accept_args = tuple(P(t.data_ptr()) for t in
             (self.tokens,self.greedy,self.meta,self.result))+(b,past.n_slots)
         # Draft direct projections use small explicit quantized scratch.
@@ -672,6 +686,7 @@ class DecodeBatch:
                 draft_resources[key] = o.shared[shared_key]
             else:
                 draft_resources[key] = a(shape,dtype)
+        comm = parallel.comm.value if isinstance(parallel.comm, P) else parallel.comm
         self.draft = NativeDSpark(o.weights,batch=b,features=self.features,
             result=self.checked,windows=o.draft_windows,resources=draft_resources,
             norm_library=norm,window_library=window,opapi=C.CDLL('libopapi.so'),
@@ -740,16 +755,19 @@ class DecodeBatch:
             layer.execute(o.workspace, self.sources.get(layer.layer),
                           self.shared_stream, self.hc_stream, self.events, o)
         self.head.run(self.owner.workspace)
+        self.sample()
         stream = P(torch.npu.current_stream(self.owner.weights.device).npu_stream)
-        _check(self.greedy_fn(stream,*self.greedy_args),'TP8 sample')
         _check(self.accept_fn(stream,*self.accept_args),'accept')
+
+    def sample(self):
+        self.top_p.sample(self.head.logits)
 
     def drain(self, *, completed_stream=None):
         for engram in self.engrams.values():
             engram.drain(completed_stream=completed_stream)
 
     def close(self):
-        for name in ('graph','seed_graph','draft_graph'):
+        for name in ('graph','seed_graph','draft_graph','sample_graph'):
             graph = getattr(self,name)
             if graph is not None:
                 graph.reset()
@@ -760,7 +778,8 @@ class DecodeBatch:
                 component.close()
         # Returned plans may outlive the runtime; drop tensors and closure cycles.
         self.__dict__.clear()
-        self.graph = self.seed_graph = self.draft_graph = None
+        self.graph = self.seed_graph = self.draft_graph = self.sample_graph = None
+        self.top_p = None
         self.head = self.draft = None
         self.layers, self.sources, self.engrams = [], {}, {}
 
@@ -850,80 +869,87 @@ class TargetLayer:
                 base=weight(prefix+f'hc_{kind}_base',fp,(24,)))
             return m, keep(HCProject(m['x'],m['weight'],m['z'],m['stats'],
                                      eps=config['hc_eps']))
-        middle = alloc((t,20480),name='attention_residual')
-        self.am, self.ah = hc('attn',x)
-        self.fm, self.fh = hc('ffn',middle)
-        normed = alloc((t,5120),name='normalized')
-        def residual(src, pre, mix, dst, norm):
-            return dict(x=src,pre=pre,post=mix['post'],comb=mix['comb'],
-                norm_weight=weight(prefix+norm,fp),normed=normed,out=dst)
-        self.ar = residual(x,incoming,self.am,middle,'attn_norm.weight')
-        self.fr = residual(middle,self.am['pre'],self.fm,output,'ffn_norm.weight')
-        self.pre = self.fm['pre']
-        a = dict(qr=alloc((t,1280),name='qr'),
-            qn=query_latent if query_latent is not None else alloc((t,1280),name='qn'),
-            qraw=alloc((t,4096),name='qraw'), q=alloc((t,8,512),name='q'),
-            kr=alloc((t,512),name='kr'), kv=alloc((t,512)),
-            ao=alloc((t,8,512),name='ao'), inv=alloc((t,8,512),name='inv'),
-            freq=freqs, ring=past.main_kv, slots=slots, start=start, active=active,
-            q_norm=weight(prefix+'attn.q_norm.weight',fp),
-            kv_norm=weight(prefix+'attn.kv_norm.weight',fp),
-            sink=weight(prefix+'attn.attn_sink',fp))
-        self.ratio = int(config['compress_ratios'][layer])
-        if self.ratio:
-            if compressed is None:
-                raise ValueError('compressed target layer needs explicit source storage')
-            a.update(compressed)
-        elif compressed is not None:
-            raise ValueError('SWA target layer cannot bind compressed storage')
-        self.a, self.pending_kv = a, a['kv']
-        low = alloc((t,1024),name='output_low')
-        local = alloc((t,5120),fp,name='attention_local')
-        self.ap = (
-            linear(normed,prefix+'attn.wq_a',a['qr']),
-            linear(a['qn'],prefix+'attn.wq_b',a['qraw']),
-            linear(normed,prefix+'attn.wkv',a['kr']),
-            linear(a['inv'].view(t,4096),prefix+'attn.wo_a',low),
-            keep(WoB(low,weight(prefix+'attn.wo_b.weight'),local,wo_b_tiling)))
-        # Both expert branches write disjoint FP32 views of caller-owned storage.
-        # The decode MoE module owns the single packed TP collective.
-        self.moe_reduction = alloc((2,t,5120),fp,name='moe_reduction')
-        mt = dict(x=normed,ids=alloc((t,6),i64,name='expert_ids'),
-            probabilities=alloc((t,6),fp,name='expert_probability'),
-            sorted_probability=alloc((pairs,),fp,name='sorted_probability'),
-            inverse=alloc((pairs,),i64,name='route_inverse'),
-            out=self.moe_reduction[0])
-        router_in = alloc((t,5120),fp,name='router_in')
-        logits = alloc((t,384),fp,name='router_logits')
-        self.route = keep(Matmul(router_in,weight(prefix+'ffn.gate.weight',fp),logits))
-        self.bias = weight(prefix+'ffn.gate.bias',fp)
-        rows = alloc((pairs,5120),name='expert_rows')
-        hidden = alloc((pairs,576),name='expert_hidden')
-        activated = alloc((pairs,288),name='expert_activated')
-        down = alloc((pairs,5120),name='expert_down')
-        ends = alloc((384,),i64,name='expert_ends')
-        if prepare_routed_scale is None:
-            raise ValueError('target requires owner-shared encoded routed scales')
-        projections = []
-        for name,src,dst,kp in (('w13',rows,hidden,5120),('w2',activated,down,320)):
-            stem = prefix+'ffn.'+name
-            q = alloc((pairs,kp),torch.int8,name='expert_quantized_'+name)
-            counts = alloc((384,),i64,name='expert_counts_'+name)
-            projections.append(keep(W4A8GroupedMatmul(src,weight(stem+'.weight'),
-                prepare_routed_scale(stem+'.scale'),weight(stem+'.hp_bias'),ends,dst,
-                quantized=q,counts=counts,
-                raw_quantized=alloc(tuple(src.shape),torch.int8,name='expert_raw_'+name),
-                token_scale=alloc((pairs,),fp,name='expert_token_scale_'+name),
-                projected=alloc(tuple(dst.shape),torch.float16,name='expert_projected_'+name))))
-        self.routed = tuple(projections)
-        sg = alloc((t,288),name='shared_gate')
-        su = alloc((t,288),name='shared_up')
-        sa = alloc((t,288),name='shared_activation')
-        st = self.moe_reduction[1]
-        self.shared = tuple(linear(src,prefix+'ffn.shared_experts.'+n,dst)
-            for n,src,dst in [('w1',normed,sg),('w3',normed,su),('w2',sa,st)])
-        self.moe = mt
-        self.modulus, self.pad = past.ring, past.pad
+        try:
+            middle = alloc((t,20480),name='attention_residual')
+            self.am, self.ah = hc('attn',x)
+            self.fm, self.fh = hc('ffn',middle)
+            normed = alloc((t,5120),name='normalized')
+            def residual(src, pre, mix, dst, norm):
+                return dict(x=src,pre=pre,post=mix['post'],comb=mix['comb'],
+                    norm_weight=weight(prefix+norm,fp),normed=normed,out=dst)
+            self.ar = residual(x,incoming,self.am,middle,'attn_norm.weight')
+            self.fr = residual(middle,self.am['pre'],self.fm,output,'ffn_norm.weight')
+            self.pre = self.fm['pre']
+            a = dict(qr=alloc((t,1280),name='qr'),
+                qn=query_latent if query_latent is not None else alloc((t,1280),name='qn'),
+                qraw=alloc((t,4096),name='qraw'), q=alloc((t,8,512),name='q'),
+                kr=alloc((t,512),name='kr'), kv=alloc((t,512)),
+                ao=alloc((t,8,512),name='ao'), inv=alloc((t,8,512),name='inv'),
+                freq=freqs, ring=past.main_kv, slots=slots, start=start, active=active,
+                q_norm=weight(prefix+'attn.q_norm.weight',fp),
+                kv_norm=weight(prefix+'attn.kv_norm.weight',fp),
+                sink=weight(prefix+'attn.attn_sink',fp))
+            self.ratio = int(config['compress_ratios'][layer])
+            if self.ratio:
+                if compressed is None:
+                    raise ValueError('compressed target layer needs explicit source storage')
+                a.update(compressed)
+            elif compressed is not None:
+                raise ValueError('SWA target layer cannot bind compressed storage')
+            self.a, self.pending_kv = a, a['kv']
+            low = alloc((t,1024),name='output_low')
+            local = alloc((t,5120),fp,name='attention_local')
+            self.ap = (
+                linear(normed,prefix+'attn.wq_a',a['qr']),
+                linear(a['qn'],prefix+'attn.wq_b',a['qraw']),
+                linear(normed,prefix+'attn.wkv',a['kr']),
+                linear(a['inv'].view(t,4096),prefix+'attn.wo_a',low),
+                keep(WoB(low,weight(prefix+'attn.wo_b.weight'),local,wo_b_tiling)))
+            # Both expert branches write disjoint FP32 views of caller-owned storage.
+            # The decode MoE module owns the single packed TP collective.
+            self.moe_reduction = alloc((2,t,5120),fp,name='moe_reduction')
+            mt = dict(x=normed,ids=alloc((t,6),i64,name='expert_ids'),
+                probabilities=alloc((t,6),fp,name='expert_probability'),
+                sorted_probability=alloc((pairs,),fp,name='sorted_probability'),
+                inverse=alloc((pairs,),i64,name='route_inverse'),
+                out=self.moe_reduction[0])
+            router_in = alloc((t,5120),fp,name='router_in')
+            logits = alloc((t,384),fp,name='router_logits')
+            self.route = keep(Matmul(router_in,weight(prefix+'ffn.gate.weight',fp),logits))
+            self.bias = weight(prefix+'ffn.gate.bias',fp)
+            rows = alloc((pairs,5120),name='expert_rows')
+            hidden = alloc((pairs,576),torch.float16,name='expert_hidden')
+            activated = alloc((pairs,288),name='expert_activated')
+            down = alloc((pairs,5120),torch.float16,name='expert_down')
+            ends = alloc((384,),i64,name='expert_ends')
+            if prepare_routed_scale is None:
+                raise ValueError('target requires owner-shared encoded routed scales')
+            projections = []
+            for name,src,dst,kp in (('w13',rows,hidden,5120),('w2',activated,down,320)):
+                stem = prefix+'ffn.'+name
+                q = alloc((pairs,kp),torch.int8,name='expert_quantized_'+name)
+                counts = alloc((384,),i64,name='expert_counts_'+name)
+                projections.append(keep(W4A8GroupedMatmul(src,weight(stem+'.weight'),
+                    prepare_routed_scale(stem+'.scale'),weight(stem+'.hp_bias'),ends,dst,
+                    quantized=q,counts=counts,
+                    raw_quantized=alloc(tuple(src.shape),torch.int8,name='expert_raw_'+name),
+                    token_scale=alloc((pairs,),fp,name='expert_token_scale_'+name))))
+            self.routed = tuple(projections)
+            sg = alloc((t,288),name='shared_gate')
+            su = alloc((t,288),name='shared_up')
+            sa = alloc((t,288),name='shared_activation')
+            st = self.moe_reduction[1]
+            self.shared = tuple(linear(src,prefix+'ffn.shared_experts.'+n,dst)
+                for n,src,dst in [('w1',normed,sg),('w3',normed,su),('w2',sa,st)])
+            self.moe = mt
+            self.modulus, self.pad = past.ring, past.pad
+        except BaseException:
+            # Close every completed child, but preserve the original build error.
+            try:
+                self.close()
+            except BaseException:
+                pass
+            raise
 
     @property
     def workspace_bytes(self):
@@ -1019,7 +1045,20 @@ class TargetLayer:
         self.parallel.sum(self.moe_reduction)
 
     def close(self):
-        if not self.closed:
-            for op in reversed(self.projections):
+        if getattr(self, 'closed', False):
+            return
+        self.closed = True
+        error = None
+        projections = getattr(self, 'projections', [])
+        while projections:
+            op = projections.pop()
+            try:
                 op.close()
-            self.closed = True
+            except BaseException as exc:
+                if error is None:
+                    error = exc
+        # Discard our references only; weights/Past/TP/scratch remain caller-owned.
+        self.__dict__.clear()
+        self.closed, self.projections, self.storage = True, [], []
+        if error is not None:
+            raise error

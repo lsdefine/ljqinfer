@@ -6167,3 +6167,141 @@ fix: default omitted temperature to sampling and restore service port
 ```text
 fix: sync A2-2 cold cache core and bounded prefix branch eviction
 ```
+
+---
+
+```text
+feat: port GLM53 full-vocabulary top-p 0.95 to A2 target sampling
+
+Preallocated CANN sort/softmax/cumsum captured for TP8; preserve native Gumbel and temp0 policy, apply bias before truncation, sample first token too. HF leaf B1-4 and native TP8 mixed-temp/graph/distribution pass; 13 regressions and 10 live API cases pass. Cost and benchmark limitations in reports/top_p_20261013.md; full-sort adds work, no comparable speedup claim. Repro: python scripts/test_top_p.py; torchrun --nproc_per_node=8 scripts/test_top_p.py --tp8 (engine stopped).
+```
+
+---
+
+```text
+perf: exact TP8 top-p via inverse ranks without full-width scatter
+
+Full-vocabulary p=.95; retained logits, mixed temperature 0/1 and think-end
+bias preserved. First token and verify use existing distributed sampler.
+Float32 IDs (<2^24) invert permutation exactly; persistent buffers B1-B4.
+
+Passed HF mask/value B1-B4 ranks 0/7, TP8 graph/distribution checks,
+8 CPU policy/budget tests, real four-way mixed-temperature generation,
+and thinking SSE. Dynamic B4->B3->B2->B1 observed. A2-3 :8001 running.
+Alternating filter+gather microbenchmark B1 .894/B2 .983/B3 1.161/B4 1.509ms;
+uncommitted vendor candidate 2.267-16.973ms by batch/distribution.
+NOT complete-round speedups. Short B1 smoke model_step_host 32.34ms,
+not controlled engine A/B. No long-context/image performance claim.
+Existing greedy nondeterminism not addressed. Decode tensors 5444383230B/rank.
+
+Previous committed feature baseline e7959b6. Applying/reverting requires
+restart/recapture, no native ABI change or library rebuild.
+Evidence/backups: /data/top_p_validation/fast_takeover/.
+```
+
+---
+
+```text
+revert: withdraw full-vocabulary top-p overhead on A2-3 development
+
+Revert 928cd8c and e7959b6; retain default temperature=1, thinking soft bias and cold-cache fixes. Restores pre-top-p policy including greedy first token; this is a semantic rollback, not equivalent top-p optimization.
+
+A2-3 :8001 six B1 requests, temperature=1, 1024 tokens: 36k step ms 32.614/33.991/33.105; 128k 33.158/34.617/33.308. Previous top-p restored medians 35.012/36.022 ms. Across restarts/stochastic paths, not isolated filtering latency or guaranteed tokens/sec speedup. Prior filter microbenchmark B1 .894ms.
+
+13 CPU tests, request guards, live mixed temp0/temp1/default and thinking-budget B4->B3->B1 plus follow-up request pass. General quality/repetition equivalence not established. Evidence /data/decode_oct13_dev/sampling_aba and sampling_rollback. A2-1/A2-2/R unchanged.
+```
+
+---
+
+```text
+Implement single-sort inverse-CDF top-p sampling for TP8 decode
+
+Fixed p=.95; same first-token policy; persistent B1-4 graph buffers; retain greedy ties and thinking bias. TP8 distribution and mixed-batch tests pass. Same-load ABBA incremental step cost: +0.165ms at 36k, +0.127ms at 131k. Formal six-run means: 33.965/34.964ms; 31-32ms target NOT established. Dev 8001 only.
+```
+
+---
+
+```text
+fix: restore draft communication handle; clean restart and B1-B4 API smoke pass
+```
+
+---
+
+```text
+perf: parallel sampling finish and FP4 blocks; A23 TP8 B1-B4 verified
+
+# A23 decode leaf optimization — 2026-10-14
+
+## Scope and implementation
+- Previous usable point: `6caae72`. A23 only, port 8001. A21/A22/R unchanged.
+- Sampling finish: four rows per AIV task; a subsequent seed-update kernel avoids cross-task seed races. Full vocabulary inverse-CDF/top-p semantics and ABI unchanged.
+- FP4 preparation: repartition independent quantization blocks for small row counts; preserve the original kernel, scaling, rounding, input/output buffers and overlap validation. Four host-side lines, no second production algorithm.
+- Resource lifecycle: vendor indexer constructor unwinds partial ownership; library singleton published only after successful initialization; TargetLayer owns returned child plans immediately and closes all owned plans on failure. Borrowed weights/Past/TP/scratch remain caller-owned.
+- No broad module split or new runtime framework. Failed tile-kernel variants remain outside the repository.
+
+## Leaf validation
+- Sampling: 96 eight-rank cases across B1–B4; mixed temperatures, seed wrap and consecutive graph replay; output and seed bit-exact against old code and across ranks.
+- FP4: 630 cases covering dimensions 32–512, row counts 1–192, both scaling modes and in-place operation; bit-exact against old code.
+- CPU lifecycle: 204/204 repository tests pass; fault injection includes partial construction, repeated close and cleanup failures. Test doubles validate Python ownership/calls, NOT native driver failure semantics.
+
+| B | old full sampler ms | new ms | saved us |
+|---|---:|---:|---:|
+| 1 | 0.610146 | 0.597804 | 12.34 |
+| 2 | 0.686109 | 0.645836 | 40.27 |
+| 3 | 0.800665 | 0.731280 | 69.38 |
+| 4 | 1.000140 | 0.907196 | 92.94 |
+
+FP4 example (dim128, block16/e4): rows6 11.024→6.279us; rows12 11.259→8.081us; rows18 11.550→8.639us. Rows24 and above retain the old launch shape; observed near-baseline timing, not a claim of universal speedup.
+
+## Whole-engine ABBA
+- Four fresh independent engine loads: old_a → new_a → new_b → old_b. Old source and 44 native binaries were copied before integration, not symlinked.
+- Both use temperature=1, top_p=.95, same environment and prompts. Each load: one warmup per context, then three measured requests per context, alternating order; 1024 output tokens each. 24 measured requests total (6/version/context), 8 warmups excluded.
+- Actual input tokens: 36868 / 131076. All measured decode batch histograms are B1.
+- Metric is complete `model_step_host_ms` per-request mean, not a kernel-only number. Each pair has only one independent load per version; loading/system drift remains significant.
+
+| Nominal context | Old model ms | New model ms | delta ms | old wall ms | new wall ms |
+|---|---:|---:|---:|---:|---:|
+| 36864 | 34.2223 | 33.5066 | -0.7157 | 34.8048 | 34.0648 |
+| 131072 | 34.5092 | 33.8149 | -0.6942 | 35.1035 | 34.4006 |
+
+| Context | paired delta a / b ms | output TPS old / new | MTP accepted/step old / new |
+|---|---|---|---|
+| 36864 | -1.1364 / -0.2950 | 80.032 / 76.241 | 1.7817 / 1.5955 |
+| 131072 | -1.1704 / -0.2181 | 75.240 / 77.717 | 1.6367 / 1.6705 |
+
+Both load-pair comparisons favor the candidate step time, but the measured aggregate ~0.7ms is not a deterministic per-step guarantee. 36k output TPS is lower and MTP acceptance differs: sampling trajectories are not matched, so this experiment does not establish the cause of the TPS change or a general throughput improvement. No isolated per-change whole-engine attribution; no per-step P95 collection; B2–B4 end-to-end performance sweep not performed.
+
+## Fresh restart / resource checks
+- Final integrated source freshly loaded after ABBA; B1–B4 graph capture completed on eight ranks. Mixed temp0/temp1 requests observed B4=191 steps and B3/B2/B1 transitions; follow-up request reuse passed.
+- Health HTTP200 with expected model; empty messages HTTP400 invalid_request_error.
+- All five loads report decode_tensor_bytes=5,312,451,872 per rank: no measured persistent tensor reduction. Final post-capture free memory ranges 182,411,264–602,779,648 bytes; headroom is small and variable, no capacity increase claimed.
+- Cleanup fault injection is CPU-only. Real native resource destroy failures have not been injected; native destroy errors are attempted once and do not prove successful release.
+
+## Reproduction / rollback
+- Evidence, full requests/responses, ABBA controller, engine logs, leaf variants and raw timings: `/data/decode_oct14_opt/`.
+- Summary: `acceptance/summary.json`; final smoke: `acceptance/smoke.log` and `smoke_*.json`; API validation: `acceptance/api_validation.json`.
+- Leaf scripts: `finish_parallel/bench.py`, `fp4_dispatch/bench.py`. They require exclusive devices and point to experiment artifacts; do not run alongside the service.
+- CPU regression: `python3 -B scripts/test_decode_resource_lifecycle.py /tmp/resource_lifecycle.json`.
+- Rebuild matching native libraries with `bash ops/decode/build.sh ops/decode/sampling.cpp ops/decode/libdecode_sampling.so` and analogous attention.cpp/libdecode_attention.so, using the saved CANN environment; restart engine.
+- Rollback to 6caae72 requires matching source AND the two native libraries (rebuild or use `acceptance/baseline_6caae72` copies). External ABI is unchanged, but rolling back only source leaves the optimized implementation loaded.
+```
+
+---
+
+```text
+docs: record same-prompt MTP recheck and qualify step-time gain
+```
+
+---
+
+```text
+perf(decode): fuse projection rounding into target MoE consumers
+
+Keep official CANN GMM and draft BF16 contract; remove target standalone casts.
+Same-process 20-run ABBA/BAAB temp1: 36k steady mean 33.074->32.832ms,
+131k 33.856->33.385ms; median reductions 0.256/0.272ms. MTP not degraded.
+28 CPU/native/graph cases and final GMM interface pass; actual batch 1..4
+and three semantic RPC checks pass. Development service restored on 8001.
+Small measured gain, not multi-ms or independent-restart performance proof.
+See reports/decode_half_consumers.{md,json} for scope and raw evidence.
+```

@@ -562,8 +562,9 @@ extern "C" int dec_dispatch(void* stream,const void* x,const void* ids,
         (uint8_t*)inverse,(uint8_t*)ends,uint32_t(pairs),blocks);return 0;
 }
 
-// Grouped expert activation: BF16 [B*36,576], FP32 probability[B*36]
-// -> BF16 [B*36,288]. Probability is applied BEFORE the only BF16 round.
+// Grouped expert activation: FP16 [B*36,576], FP32 probability[B*36]
+// Input rounds through BF16 exactly as the former standalone cast.
+// -> BF16 [B*36,288]. Probability precedes the final output BF16 round.
 extern "C" __global__ __aicore__ void decode_routed_act_kernel(
     GM_ADDR H,GM_ADDR P,GM_ADDR Y,uint32_t rows,uint32_t blocks){
     if(GetBlockIdx()>=blocks)return;
@@ -573,20 +574,24 @@ extern "C" __global__ __aicore__ void decode_routed_act_kernel(
     pipe.InitBuffer(bu,N*4);pipe.InitBuffer(bt,N*4);pipe.InitBuffer(bp,R*4);
     auto b=bb.Get<bfloat16_t>();auto g=bg.Get<float>();
     auto u=bu.Get<float>();auto t=bt.Get<float>();auto prob=bp.Get<float>();
-    GlobalTensor<bfloat16_t> gh,gy;GlobalTensor<float> gp;
-    gh.SetGlobalBuffer((__gm__ bfloat16_t*)H);gy.SetGlobalBuffer((__gm__ bfloat16_t*)Y);
+    GlobalTensor<half> gh;GlobalTensor<bfloat16_t> gy;GlobalTensor<float> gp;
+    gh.SetGlobalBuffer((__gm__ half*)H);gy.SetGlobalBuffer((__gm__ bfloat16_t*)Y);
     gp.SetGlobalBuffer((__gm__ float*)P);
     for(uint32_t tile=GetBlockIdx();tile<(rows+R-1)/R;tile+=blocks){
         uint32_t row=tile*R;uint16_t active=min(uint32_t(R),rows-row);
         int32_t count=int32_t(active)*K;
         DataCopyParams cp{active,K/16,K/16,0};
-        DataCopy(b,gh[uint64_t(row)*2*K],cp);PipeBarrier<PIPE_ALL>();
+        DataCopy(b.ReinterpretCast<half>(),gh[uint64_t(row)*2*K],cp);PipeBarrier<PIPE_ALL>();
+        Cast(g,b.ReinterpretCast<half>(),RoundMode::CAST_NONE,count);PipeBarrier<PIPE_V>();
+        Cast(b,g,RoundMode::CAST_RINT,count);PipeBarrier<PIPE_V>();
         Cast(g,b,RoundMode::CAST_NONE,count);PipeBarrier<PIPE_ALL>();
-        DataCopy(b,gh[uint64_t(row)*2*K+K],cp);
+        DataCopy(b.ReinterpretCast<half>(),gh[uint64_t(row)*2*K+K],cp);
         DataCopyPad(prob,gp[row],DataCopyExtParams{1,uint32_t(active)*4,0,0,0},
                     DataCopyPadExtParams<float>{false,0,0,0});
         SetFlag<HardEvent::MTE2_S>(EVENT_ID0);WaitFlag<HardEvent::MTE2_S>(EVENT_ID0);
-        PipeBarrier<PIPE_ALL>();Cast(u,b,RoundMode::CAST_NONE,count);PipeBarrier<PIPE_V>();
+        PipeBarrier<PIPE_ALL>();Cast(u,b.ReinterpretCast<half>(),RoundMode::CAST_NONE,count);PipeBarrier<PIPE_V>();
+        Cast(b,u,RoundMode::CAST_RINT,count);PipeBarrier<PIPE_V>();
+        Cast(u,b,RoundMode::CAST_NONE,count);PipeBarrier<PIPE_V>();
         Mins(g,g,10.0f,count);Mins(u,u,10.0f,count);PipeBarrier<PIPE_V>();
         Maxs(u,u,-10.0f,count);Muls(t,g,-1.0f,count);PipeBarrier<PIPE_V>();
         Exp(t,t,count);PipeBarrier<PIPE_V>();Adds(t,t,1.0f,count);PipeBarrier<PIPE_V>();
@@ -619,8 +624,8 @@ extern "C" __global__ __aicore__ void decode_routed_combine_kernel(
     pipe.InitBuffer(bf,K*T*4);pipe.InitBuffer(ba,T*4);
     auto idx=bi.Get<int64_t>();auto b=bb.Get<bfloat16_t>();
     auto f=bf.Get<float>();auto acc=ba.Get<float>();
-    GlobalTensor<bfloat16_t> gx;GlobalTensor<int64_t> gi;GlobalTensor<float> gy;
-    gx.SetGlobalBuffer((__gm__ bfloat16_t*)X);gi.SetGlobalBuffer((__gm__ int64_t*)I);
+    GlobalTensor<half> gx;GlobalTensor<int64_t> gi;GlobalTensor<float> gy;
+    gx.SetGlobalBuffer((__gm__ half*)X);gi.SetGlobalBuffer((__gm__ int64_t*)I);
     gy.SetGlobalBuffer((__gm__ float*)Y);
     for(uint32_t tile=GetBlockIdx();tile<tokens*2;tile+=blocks){
         uint32_t token=tile/2,col=(tile%2)*T;
@@ -632,8 +637,10 @@ extern "C" __global__ __aicore__ void decode_routed_combine_kernel(
             int64_t lo=min(rows[j],rows[j+1]),hi=max(rows[j],rows[j+1]);
             rows[j]=lo;rows[j+1]=hi;
         }
-        for(int j=0;j<K;++j)DataCopy(b[j*T],gx[uint64_t(rows[j])*D+col],T);
-        PipeBarrier<PIPE_ALL>();Cast(f,b,RoundMode::CAST_NONE,K*T);PipeBarrier<PIPE_V>();
+        for(int j=0;j<K;++j)DataCopy(b.ReinterpretCast<half>()[j*T],gx[uint64_t(rows[j])*D+col],T);
+        PipeBarrier<PIPE_ALL>();Cast(f,b.ReinterpretCast<half>(),RoundMode::CAST_NONE,K*T);PipeBarrier<PIPE_V>();
+        Cast(b,f,RoundMode::CAST_RINT,K*T);PipeBarrier<PIPE_V>();
+        Cast(f,b,RoundMode::CAST_NONE,K*T);PipeBarrier<PIPE_V>();
         Adds(acc,f,0.0f,T);PipeBarrier<PIPE_V>();
         for(int j=1;j<K;++j){Add(acc,acc,f[j*T],T);PipeBarrier<PIPE_V>();}
         PipeBarrier<PIPE_ALL>();DataCopy(gy[uint64_t(token)*D+col],acc,T);PipeBarrier<PIPE_ALL>();

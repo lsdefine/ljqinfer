@@ -457,6 +457,10 @@ extern "C" int dec_source_fp4(void* stream,void* x,void* y,int rows,int dim,int 
         (uintptr_t(x)&31)||(uintptr_t(y)&31)||!((block==16&&e4==1)||(block==32&&e4==0)))return -1;
     uint64_t bytes=uint64_t(rows)*dim*2;uintptr_t a=uintptr_t(x),b=uintptr_t(y);
     if(a!=b&&(a<b?b-a:a-b)<bytes)return -1;
+    // Independent quantization blocks: split small row counts without adding waves.
+    int parts=1;
+    while(rows*parts*2<=40 && dim%(parts*2)==0 && (dim/(parts*2))%32==0)parts*=2;
+    rows*=parts;dim/=parts;
     int blocks=(rows+1)/2;if(blocks>40)blocks=40;
     source_fp4<<<(2*blocks),nullptr,stream>>>((uint8_t*)x,(uint8_t*)y,rows,dim,block,e4,blocks);return 0;
 }

@@ -6,7 +6,7 @@ ROOT=$(cd -- "$(dirname -- "$0")" && pwd)
 # Explicit build-time convenience; never invoked by the runtime.
 if [ "$#" -eq 0 ]; then
   ROOT=$(cd -- "$(dirname -- "$0")" && pwd)
-  for name in norm attention gemm window hc_project hc_finish kv_prepare w4_prepare wo_b_cube draft_vocab_cube markov_cube draft_down_cube source_cube; do
+  for name in sampling norm attention gemm window hc_project hc_finish kv_prepare w4_prepare wo_b_cube draft_vocab_cube markov_cube draft_down_cube source_cube; do
     bash "$ROOT/build.sh" "$ROOT/$name.cpp" "$ROOT/libdecode_$name.so"
   done
   bash "$ROOT/build.sh" --tiling "$ROOT"
@@ -53,7 +53,7 @@ SRC=${1:?source.cpp required}
 OUT=${2:?output.so required}
 ARCH=dav-c220
 # Vector-only modules require an explicit AIV target with direct bisheng.
-if [ "$(basename -- "$SRC")" = "kv_prepare.cpp" ] || [ "$(basename -- "$SRC")" = "hc_finish.cpp" ] || [ "$(basename -- "$SRC")" = "norm.cpp" ] || [ "$(basename -- "$SRC")" = "attention.cpp" ] || [ "$(basename -- "$SRC")" = "hc_project.cpp" ] || [ "$(basename -- "$SRC")" = "w4_prepare.cpp" ]; then
+if [ "$(basename -- "$SRC")" = "sampling.cpp" ] || [ "$(basename -- "$SRC")" = "kv_prepare.cpp" ] || [ "$(basename -- "$SRC")" = "hc_finish.cpp" ] || [ "$(basename -- "$SRC")" = "norm.cpp" ] || [ "$(basename -- "$SRC")" = "attention.cpp" ] || [ "$(basename -- "$SRC")" = "hc_project.cpp" ] || [ "$(basename -- "$SRC")" = "w4_prepare.cpp" ]; then
   ARCH=dav-c220-vec
 fi
 if [[ "$(basename -- "$SRC")" == *_cube.cpp ]]; then

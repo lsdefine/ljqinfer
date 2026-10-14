@@ -318,13 +318,15 @@ class Engine:
         import torch
         torch.npu.synchronize(self.weights.device)
 
-    def _first_token(self, output):
-        # Startup CPU staging: no device argmax output allocation per request.
+    def _first_token(self, output, temperature):
+        # Retain finite validation; draw on device via startup-captured sampler.
         self.prefill_logits.copy_(output.logits, non_blocking=False)
         import torch
         if not bool(torch.isfinite(self.prefill_logits).all()):
             raise RuntimeError('non-finite prefill logits')
-        return int(self.prefill_logits.reshape(-1).argmax())
+        return self._bound_decode(self.past).sample_prefill(
+            output.logits, temperature,
+            producer_stream=torch.npu.current_stream(self.weights.device))
 
     def _seed_row(self, row, output):
         import torch
@@ -390,7 +392,7 @@ class Engine:
             if self.rank == 0:
                 row.encoder_seconds = sum(a.elapsed_time(b) for a, b in spans) / 1000
                 row.ced_seconds = ced_begin.elapsed_time(ced_end) / 1000
-            row.first = row.anchor = self._first_token(output)
+            row.first = row.anchor = self._first_token(output, row.temp)
             row.thinking.accept([row.first])
             self._seed_row(row, output)
             return row

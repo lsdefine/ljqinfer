@@ -10,6 +10,10 @@ from strategy.async_writeback import AsyncWriteback
 from model.glm53_cold_transfer import ColdTransfer
 
 
+# Total host cold-cache bytes across all ranks (same setting name as A2).
+COLD_CACHE_BYTES = 88_370_380_800
+
+
 class PrefixState:
     def __init__(self, engine):
         self.engine = engine
@@ -32,9 +36,13 @@ class PrefixState:
                   for k in self.transfer.local_keys]
         row_bytes = sum(self.fields[k][0].numel() * self.fields[k].element_size()
                         for k in self.transfer.local_keys)
-        # Two contexts of UNIQUE payload: public layers have one CPU owner;
-        # draft heads retain their actual rank-local shards.
-        budget = 2 * engine.capacity * row_bytes
+        # Five contexts (~82.3 GiB total at capacity=147520), allocated on demand.
+        # Public layers have one CPU owner; draft heads retain rank-local shards.
+        total_row_bytes = sum(
+            value[0].numel() * value.element_size() *
+            (1 if key in self.transfer.owners else self.transfer.world)
+            for key, value in self.fields.items())
+        budget = COLD_CACHE_BYTES * row_bytes // total_row_bytes
         self.arena = HostArena(budget)
         warm = self.arena.alloc(512)
         self.arena.free(warm, 512)

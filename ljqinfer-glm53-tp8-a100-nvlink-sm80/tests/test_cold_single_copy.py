@@ -29,7 +29,9 @@ def main():
         index=torch.empty((21, capacity, 128), dtype=torch.bfloat16, device=device),
         mtp_kv=pool, length=0, pending=None)
     pool.reserve(0, capacity)
-    state = PrefixState(e)
+    from unittest.mock import patch
+    with patch('model.glm53_cache.COLD_CACHE_BYTES', 5 * capacity * 119808):
+        state = PrefixState(e)
     tokens = list(range(n))
 
     def fill():
@@ -104,9 +106,40 @@ def main():
         verify(hit)
         state.clear()
         assert state.arena.used_bytes == 0
+        # Repeated shared-prefix forks must evict independently on every rank.
+        # Snapshot the actual GPU payload, not a separately recomputed model.
+        branches = 24
+        cut = n // 4
+        for branch in range(branches):
+            fork = tokens[:cut] + [10000 + branch] * (n - cut)
+            fill()
+            for data in state.fields.values():
+                data[cut:n].add_(branch)
+            expected = {key: data[:n].cpu().clone() for key, data in state.fields.items()}
+            e.length = pool.lengths[0] = n
+            state.publish(fork); state.drain()
+            state.invalidate()
+            for data in state.fields.values():
+                data.fill_(-1)
+            hit, source = state.restore(fork + [-3])
+            torch.cuda.synchronize()
+            assert (hit, source) == (n, 'cold'), (rank, branch, hit, source)
+            for key, data in state.fields.items():
+                assert torch.equal(data[:n].cpu(), expected[key]), (rank, branch, key)
+            with state.cold.lookup(tokens[:cut] + [-4], namespace=state.namespace) as lease:
+                assert lease.token_count == cut
+                assert len(lease.ids) == 1, (rank, branch, lease.ids)
+            assert state.arena.used_bytes <= state.arena.capacity
+        state.clear()
+        assert state.arena.used_bytes == 0
         dist.barrier()
+        result_dir = os.environ.get('COLD_TEST_RESULT_DIR')
+        if result_dir:
+            Path(result_dir).mkdir(parents=True, exist_ok=True)
+            Path(result_dir, f'rank{rank}.json').write_text(json.dumps(
+                dict(rank=rank, tokens=n, branches=branches, passed=True)))
         if rank == 0:
-            print('PASS: unique public copy, rank-private draft, split spans, eviction divergence, recovery, clipped lease', flush=True)
+            print('PASS: unique public copy, rank-private draft, split spans, eviction divergence, recovery, clipped lease, branch LRU', flush=True)
     finally:
         state.close()
         dist.destroy_process_group()

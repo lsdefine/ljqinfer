@@ -6,6 +6,7 @@ from .glm53_engine import Engine
 from model.config import DEFAULT_PREFILL_CHUNK_TOKENS
 from .glm53_dflash import DFlash2
 from .glm53_cache import PrefixState
+from .sampling import pick_tokens
 
 
 def accepted_prefix(proposed, predictions):
@@ -42,7 +43,7 @@ class Generator:
         self.cache.clear()
 
     @torch.inference_mode()
-    def prefill(self, prompt_ids, *, engine=None, draft=None):
+    def prefill(self, prompt_ids, *, engine=None, draft=None, temperature=0):
         """Single-request prefill lifecycle, shared by single and batched decode.
 
         As in v41f Strategy: restore -> compute/commit/store each prompt chunk
@@ -72,7 +73,7 @@ class Generator:
                 mark = time.perf_counter()
                 cache.publish(prompt_ids[:end])
                 store_seconds += time.perf_counter() - mark
-            anchor = int(result.logits[-1].argmax().item())
+            anchor = int(pick_tokens(result.logits[-1:], [temperature]).item())
         except BaseException:
             cache.invalidate()
             raise

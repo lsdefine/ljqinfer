@@ -41,7 +41,11 @@ def health():
 @app.post("/generate")
 def generate(body: dict):
     request_id = str(body["request_id"])
-    queue = strategy.query(body["input_ids"], int(body["max_new_tokens"]))
+    try:
+        queue = strategy.query(body["input_ids"], int(body["max_new_tokens"]),
+                               temperature=body.get("temperature", 1))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     with _state["lock"]:
         if request_id in _state["handles"]:
             raise HTTPException(409, "duplicate request_id")

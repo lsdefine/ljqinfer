@@ -595,3 +595,77 @@ Align GLM53 reasoning API controls with native chat template
 
 Preserve low/high/max effort, accept output_config and adaptive thinking, reject unsupported controls without silent remapping. Restore model-shipped template. 44 CPU tests and both live API protocols in blocking/streaming modes pass.
 ```
+
+---
+
+```text
+Fix clipped-prefix leases to preserve independent LRU branches
+
+Pin only actual backing slices through the matched prefix; new forks inherit their true provider rather than an unrelated suffix. Old shared-prefix fanout fails by branch 3; fixed 100-branch pressure and 150 nested forks preserve exact data. Validation: 58 cache/CUDA/protocol tests pass; TP8 NCCL 24 branches, all 8 ranks bitwise restore pass. Run pytest on test_cold_branch_lru, test_cold_capacity, test_async_writeback, test_openai_protocol, test_service_template_contract; torchrun nproc=8 tests/test_cold_single_copy.py with COLD_TEST_TOKENS=128. Live restart and long production soak pending.
+```
+
+---
+
+```text
+Document live cache eviction and reinsertion validation
+```
+
+---
+
+```text
+Raise GLM53 host prefix cache to five contexts (82.3 GiB total)
+
+Increase budget from 295040 to 737600 token-equivalents; retain proportional rank allocation, lazy pinned arena growth and LRU. 58 regression tests pass.
+```
+
+---
+
+```text
+Share hardware-independent cold KV core with A2
+
+Common stdlib core with branch-safe eviction; thin Torch IO adapter. Tests: both hosts 5 contract tests; GLM 17 cache/writeback tests; A2 NPU DMA and 20 fork cycles. Live services not restarted.
+```
+
+---
+
+```text
+Unify total COLD_CACHE_BYTES and preserve empty payloads
+
+GLM total 88370380800 bytes with ownership-weighted rank budgets; A2 remains 50GiB. Shared core restores empty-payload support. Tests: 22 regressions; torchrun --standalone --nproc-per-node=8 tests/test_cold_single_copy.py passes bytewise restore and branch eviction with explicit small budget; A2 scripts/check_cold_cache.py passes. Both services restarted; live cross-branch restores and final answers pass. Repetitive GLM prompt showed initial cold/warm reasoning text divergence; unresolved, no universal text-equivalence claim.
+```
+
+---
+
+```text
+Default service temperature to 1 and wire per-request target sampling
+
+Match A2 a0d8703 temperature 0/1 contract. Rank0 samples target tokens and broadcasts to TP peers; preserve per-request settings through RPC and boarding. No CUDA kernel changes. 61 protocol/temperature tests pass; cancellation 15 pass separately. Restarted TP8: default/0/1 concurrent requests, sequential greedy repeats and invalid400 pass. Live smoke capped at 48 tokens; does not prove cross-batch greedy text equivalence.
+```
+
+---
+
+```text
+Fix GLM temperature-1 sampling with default top-p 0.95
+
+Match HF nucleus filtering in shared target sampler. 62 tests passed; TP8 graph/eager and greedy regression verified.
+```
+
+---
+
+```text
+Support disabled thinking through GLM chat template and API controls
+```
+
+---
+
+```text
+Batch nucleus inverse-CDF sampling and capture long-generation evidence
+
+HF/FP64 oracle CPU 131 passed+1skip; CUDA 33 passed+3skip; TP8 five pure/mixed temperature cases pass. Busy GPU Q8 B1 1.967->1.486ms, B4 9.165->3.414ms (not E2E). Greedy unchanged. Save >=8192 raw-token traces outside repo. No claim to fix rare The loops; live service reload still required.
+```
+
+---
+
+```text
+Record idle and full-model sampler acceptance including 8192-token trace
+```

@@ -11,7 +11,8 @@ class StubStrategy:
     def check_ready(self):
         return None
 
-    def query(self, ids, max_tokens):
+    def query(self, ids, max_tokens, temperature=1):
+        self.temperature = temperature
         q = Queue()
         q.request_id = 'contract'
         q.put({'type': 'prefill', 'metrics': {}})
@@ -66,11 +67,12 @@ def test_thinking_mode(service, kind):
 
 
 @pytest.mark.parametrize('options', [
-    {'thinking': {'type':'disabled'}}, {'thinking': {'type':[]}},
+    {'thinking': {'type':[]}},
     {'thinking': {'type':'adaptive','budget_tokens':1024}},
     {'thinking': {'type':'enabled','budget_tokens':1024}},
-    {'enable_thinking':False}, {'enable_thinking':'false'},
-    {'chat_template_kwargs':{'enable_thinking':False}},
+    {'enable_thinking':'false'},
+    {'enable_thinking':True, 'chat_template_kwargs':{'enable_thinking':False}},
+    {'thinking':{'type':'enabled'}, 'enable_thinking':False},
     {'reasoning_effort':'none'}, {'reasoning_effort':'medium'},
     {'reasoning_effort':'xhigh'}, {'reasoning_effort':[]},
     {'output_config':'low'}, {'reasoning':[]},
@@ -85,7 +87,10 @@ def test_unsupported_controls_are_explicit(service, options):
 
 def test_native_template_source(service):
     source = Path('/mnt/data2/kw/GLM-5.3-UNCENSORED-FP8/chat_template.jinja')
-    assert Path(DEFAULT_TEMPLATE).read_bytes() == source.read_bytes()
+    native = service._template.environment.from_string(source.read_text())
+    for effort in ['low', 'high', 'max']:
+        kwargs = dict(messages=[{'role':'user','content':'hello'}], tools=None, add_generation_prompt=True, reasoning_effort=effort, enable_thinking=True)
+        assert service._template.render(**kwargs) == native.render(**kwargs)
 
 
 def test_blocking_and_stream_outputs(service):
@@ -136,5 +141,45 @@ def test_http_reasoning(service, monkeypatch, endpoint, stream):
         assert m['reasoning_content'] == 'Check the sum.' and m['content'] == '42'
     bad = TestClient(app).post(endpoint, headers={'x-api-key':'devkey'}, json={
         'messages':[{'role':'user','content':'hello'}], 'stream':stream,
-        'thinking':{'type':'disabled'}})
+        'thinking':{'type':'invalid'}})
     assert bad.status_code == 400 and bad.json()['error']['type'] == 'invalid_request_error'
+
+
+@pytest.mark.parametrize('options', [
+    {'enable_thinking':False},
+    {'chat_template_kwargs':{'enable_thinking':False}},
+    {'thinking':{'type':'disabled'}},
+])
+@pytest.mark.parametrize('endpoint', ['/v1/messages', '/v1/chat/completions'])
+@pytest.mark.parametrize('stream', [False, True])
+def test_disabled_thinking(service, monkeypatch, options, endpoint, stream):
+    from fastapi.testclient import TestClient
+    from server.server import app, _state
+    monkeypatch.setitem(_state, 'service', service)
+    monkeypatch.setitem(_state, 'config', {'model_name':'glm-5.3'})
+    body = {'model':'glm-5.3', 'messages':[{'role':'user','content':'hello'}],
+            'max_tokens':128, 'stream':stream, **options}
+    plan = service.intake(to_service_request(body))
+    assert plan['enable_thinking'] is False
+    assert plan['reasoning_effort'] is None
+    prompt = service.render(plan)
+    assert prompt.endswith('<|assistant|><think></think>')
+    assert 'Reasoning Effort:' not in prompt
+    service._strategy.tokens = service.encode('42')
+    response = TestClient(app).post(endpoint, headers={'x-api-key':'devkey'}, json=body)
+    assert response.status_code == 200, response.text
+    if stream:
+        events = [json.loads(l[6:]) for l in response.text.splitlines()
+                  if l.startswith('data: ') and l != 'data: [DONE]']
+        if endpoint.endswith('messages'):
+            assert not any(e.get('content_block',{}).get('type') == 'thinking' for e in events)
+            assert ''.join(e.get('delta',{}).get('text','') for e in events) == '42'
+        else:
+            deltas = [e['choices'][0]['delta'] for e in events if e.get('choices')]
+            assert not any(d.get('reasoning_content') for d in deltas)
+            assert ''.join(d.get('content','') for d in deltas) == '42'
+    elif endpoint.endswith('messages'):
+        assert response.json()['content'] == [{'type':'text', 'text':'42'}]
+    else:
+        m = response.json()['choices'][0]['message']
+        assert m['content'] == '42' and not m.get('reasoning_content')

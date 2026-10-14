@@ -70,7 +70,9 @@ def startup(devices=None, prefill_chunk_tokens=None):
         _worker.start()
 
 
-def query(input_ids, max_new_tokens):
+def query(input_ids, max_new_tokens, temperature=1):
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or temperature not in (0, 1):
+        raise ValueError('temperature must be 0 or 1')
     ids = list(input_ids)
     n = int(max_new_tokens)
     if not ids or n < 1 or len(ids) + n > MAX_TOTAL_TOKENS:
@@ -80,7 +82,7 @@ def query(input_ids, max_new_tokens):
     out = Queue()
     out.cancel_handle = handle = Handle()
     out.request_id = handle.request_id
-    _jobs.put((ids, n, out, handle))
+    _jobs.put((ids, n, out, handle, temperature))
     return out
 
 
@@ -98,7 +100,7 @@ def _run_batch(payload, jobs, rank, deferred):
         if flags.numel() != len(payload) + 1:
             flags = torch.zeros(len(payload) + 1, dtype=torch.int32)
         if rank == 0:
-            for i, (_, _, _, h) in enumerate(jobs):
+            for i, (_, _, _, h, _) in enumerate(jobs):
                 flags[i] = 2 if h.stop_reason == 'semantic_eos' else int(h.event.is_set())
             flags[-1] = bool(deferred) or not _jobs.empty()
         dist.broadcast(flags, src=0, group=_control)
@@ -149,7 +151,7 @@ def _run_batch(payload, jobs, rank, deferred):
             prefill_stall_seconds=t["stall"] if t else 0.0)
         if rank == 0:
             print('[strategy] ' + json.dumps(dict(input_tokens=len(payload[i][0]),
-                output_tokens=len(result.token_ids), **stats), sort_keys=True), flush=True)
+                output_tokens=len(result.token_ids), temperature=payload[i][2], **stats), sort_keys=True), flush=True)
             jobs[i][3].state = 'done'
             jobs[i][2].put({'type': 'end', 'finish_reason': result.finish_reason,
                 **stats, 'decode_steps': len(result.steps),
@@ -174,7 +176,7 @@ def _run_batch(payload, jobs, rank, deferred):
                 if job is None:
                     deferred.appendleft(job)
                     break
-                ids, n, out, handle = job
+                ids, n, out, handle, temperature = job
                 if handle.event.is_set():
                     handle.state = 'done'
                     out.put({'type': 'end', 'cancelled': True, 'finish_reason': 'cancelled'})
@@ -185,7 +187,7 @@ def _run_batch(payload, jobs, rank, deferred):
                     break
                 jobs.append(job)
                 handle.state = 'running'
-                command[0] = (ids, n)
+                command[0] = (ids, n, temperature)
                 break
         dist.broadcast_object_list(command, src=0, group=_control)
         elapsed = time.perf_counter() - started
@@ -202,7 +204,8 @@ def _run_batch(payload, jobs, rank, deferred):
             print(f'[glm53] boarded request={jobs[row][3].request_id} row={row} active={active}', flush=True)
 
     before = _resident.capture_count
-    _resident.generate([ids for ids, _ in payload], [n for _, n in payload],
+    _resident.generate([p[0] for p in payload], [p[1] for p in payload],
+        temperatures=[p[2] for p in payload],
         on_tokens=tokens, on_prefill=prefilled, should_stop=cancelled, on_done=done,
         board_request=board, on_boarded=boarded, on_round=round_done)
     if rank == 0:
@@ -243,10 +246,10 @@ def worker_loop():
                             break
                         jobs.append(nxt)
                         pages += needed
-                    command[0] = [(ids, n) for ids, n, _, _ in jobs]
-                    for _, _, _, h in jobs:
+                    command[0] = [(ids, n, t) for ids, n, _, _, t in jobs]
+                    for _, _, _, h, _ in jobs:
                         h.state = 'running'
-                    ids, n, out, handle = jobs[0]
+                    ids, n, out, handle, temperature = jobs[0]
             dist.broadcast_object_list(command, src=0, group=_control)
             if command[0] is None:
                 break

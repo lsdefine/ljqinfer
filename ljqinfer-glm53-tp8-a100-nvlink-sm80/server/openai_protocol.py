@@ -133,7 +133,7 @@ def to_service_request(body: Dict[str, Any]) -> Dict[str, Any]:
         request["tools"] = body["tools"]
     for key in ("thinking", "reasoning_effort", "reasoning",
                 "clear_thinking", "enable_thinking", "output_config",
-                "chat_template_kwargs"):
+                "chat_template_kwargs", "temperature"):
         if key in body:
             request[key] = body[key]
     return request

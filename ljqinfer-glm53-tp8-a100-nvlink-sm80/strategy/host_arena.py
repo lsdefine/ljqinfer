@@ -31,8 +31,7 @@ def _aligned(nbytes):
     return (int(nbytes) + _ALIGN - 1) // _ALIGN * _ALIGN
 
 
-class ArenaCapacityError(MemoryError):
-    """The bounded arena has no contiguous extent for this allocation."""
+from strategy.cold_kv_core import ArenaCapacityError
 
 
 class HostArena:

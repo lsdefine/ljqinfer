@@ -4,6 +4,7 @@ No weight/KV copies on compaction; only page maps and committed lengths move.
 """
 import time
 import torch
+from model.sampling import pick_tokens
 from model.glm53_batch import BatchSession, _slot
 from model.glm53_joint_draft import JointDraft
 from model.glm53_generate import Generation, accepted_prefix
@@ -72,13 +73,16 @@ class ResidentBatch(BatchSession):
         self.generator.reset()
 
     @torch.inference_mode()
-    def generate(self,prompts,limits,*,eos_token_ids=None,use_graph=True,
+    def generate(self,prompts,limits,*,temperatures=None,eos_token_ids=None,use_graph=True,
                  on_tokens=None,on_prefill=None,on_done=None,should_stop=None,
                  on_round=None,board_request=None,on_boarded=None):
         if self.busy:raise RuntimeError('overlapping resident epochs')
         if not prompts or len(prompts)!=len(limits) or len(prompts)>self.max_batch:
             raise ValueError('invalid initial batch')
         prompts=[list(p) for p in prompts];limits=list(limits)
+        temperatures=[0]*len(prompts) if temperatures is None else list(temperatures)
+        if len(temperatures)!=len(prompts) or any(t not in (0,1) for t in temperatures):
+            raise ValueError('one temperature (0 or 1) per request required')
         if any(not p or n<1 or len(p)+n+8>self.engine.capacity for p,n in zip(prompts,limits)):
             raise ValueError('invalid request capacity')
         if sum((len(p)+n+8+63)//64 for p,n in zip(prompts,limits))>self.engine.capacity//64:
@@ -101,7 +105,7 @@ class ResidentBatch(BatchSession):
             self._bind(row,self.used_pages,pages);self.used_pages+=pages
             self.row_ids.append(rid);outputs.append([]);steps.append([]);reasons.append('length');done.append(False);born.append(time.perf_counter())
             e,d=self.slots[row]
-            anchor,metrics=self.generator.prefill(p,engine=e,draft=d)
+            anchor,metrics=self.generator.prefill(p,engine=e,draft=d,temperature=temperatures[rid])
             outputs[rid].append(anchor)
             if anchor in stop:reasons[rid]='eos'
             if on_prefill:on_prefill(rid,dict(metrics,seconds=metrics['model_prefill_seconds'],
@@ -134,9 +138,11 @@ class ResidentBatch(BatchSession):
                     remaining=(self.engine.capacity//64-self.used_pages)*64
                     request=board_request(remaining,self.engine.capacity)
                     if request is None:break
-                    p,n=request;p=list(p);n=int(n)
+                    p,n=request[:2];temperature=request[2] if len(request)==3 else 0
+                    if temperature not in (0,1):raise ValueError("invalid boarded temperature")
+                    p=list(p);n=int(n)
                     if not p or n<1 or len(p)+n+8>remaining:raise ValueError('invalid boarded lease')
-                    rid=len(outputs);prompts.append(p);limits.append(n)
+                    rid=len(outputs);prompts.append(p);limits.append(n);temperatures.append(temperature)
                     anchor=admit(p,n,rid)
                     self._resident_prepare(len(self.row_ids),use_graph)
                     if on_tokens:on_tokens(rid,[anchor])
@@ -148,7 +154,8 @@ class ResidentBatch(BatchSession):
                 tick=time.perf_counter();emit_seconds=0.0
                 proposals=self.joint_drafts[key].run([outputs[i][-1] for i in self.row_ids],use_graph).tolist()
                 blocks=[[outputs[rid][-1]]+proposals[row] for row,rid in enumerate(self.row_ids)]
-                predicted=self.verify(active,blocks,use_graph).argmax(-1).tolist()
+                predicted=pick_tokens(self.verify(active,blocks,use_graph),
+                    [temperatures[rid] for rid in self.row_ids]).tolist()
                 for row,rid in enumerate(self.row_ids):
                     e,d=self.slots[row];before=e.length
                     accept=accepted_prefix(blocks[row],predicted[row])

@@ -1,0 +1,117 @@
+{
+  "root_cause": "Draft BF16 routed_hidden was interpreted as FP16 by shared target activation kernel",
+  "runs": {
+    "repeat_results": [
+      {
+        "run": "c0_greedy_101_r0",
+        "steps": 255,
+        "elapsed": 12.831278011202812
+      },
+      {
+        "run": "c0_greedy_101_r3",
+        "steps": 251,
+        "elapsed": 12.679490650072694
+      },
+      {
+        "run": "c0_sample_101_r1",
+        "steps": 258,
+        "elapsed": 13.553089065477252
+      },
+      {
+        "run": "c0_sample_202_r2",
+        "steps": 277,
+        "elapsed": 14.765526320785284
+      },
+      {
+        "run": "c0_sample_303_r4",
+        "steps": 269,
+        "elapsed": 14.590874476358294
+      },
+      {
+        "run": "c1_greedy_101_r5",
+        "steps": 253,
+        "elapsed": 26.06871180422604
+      },
+      {
+        "run": "c1_greedy_101_r8",
+        "steps": 252,
+        "elapsed": 25.188462590798736
+      },
+      {
+        "run": "c1_sample_101_r6",
+        "steps": 249,
+        "elapsed": 27.916876185685396
+      },
+      {
+        "run": "c1_sample_202_r7",
+        "steps": 257,
+        "elapsed": 26.51931076683104
+      },
+      {
+        "run": "c1_sample_303_r9",
+        "steps": 262,
+        "elapsed": 26.729964854195714
+      }
+    ],
+    "fixed_results": [
+      {
+        "run": "c0_greedy_101_r0",
+        "steps": 176,
+        "elapsed": 10.07600561156869
+      },
+      {
+        "run": "c0_greedy_101_r3",
+        "steps": 193,
+        "elapsed": 10.819097043946385
+      },
+      {
+        "run": "c0_sample_101_r1",
+        "steps": 228,
+        "elapsed": 12.534158727154136
+      },
+      {
+        "run": "c0_sample_202_r2",
+        "steps": 210,
+        "elapsed": 11.947402946650982
+      },
+      {
+        "run": "c0_sample_303_r4",
+        "steps": 227,
+        "elapsed": 13.128882348537445
+      },
+      {
+        "run": "c1_greedy_101_r5",
+        "steps": 191,
+        "elapsed": 23.08945601247251
+      },
+      {
+        "run": "c1_greedy_101_r8",
+        "steps": 182,
+        "elapsed": 24.646163288503885
+      },
+      {
+        "run": "c1_sample_101_r6",
+        "steps": 214,
+        "elapsed": 24.770953502506018
+      },
+      {
+        "run": "c1_sample_202_r7",
+        "steps": 212,
+        "elapsed": 25.194258950650692
+      },
+      {
+        "run": "c1_sample_303_r9",
+        "steps": 220,
+        "elapsed": 26.89021910727024
+      }
+    ]
+  },
+  "receipt_errors": 0,
+  "receipt_steps": 2053,
+  "draws": 1440,
+  "float64_mismatches": 0,
+  "kernel_mismatches": 0,
+  "outside_nucleus": 0,
+  "integrated_test_cases": 61,
+  "library_sha256": "3e188150ed0201db7cfe42efb738ca70efa38ea8052eaf22ebbe8848522a3322"
+}

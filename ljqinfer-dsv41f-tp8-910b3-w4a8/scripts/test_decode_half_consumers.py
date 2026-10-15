@@ -1,4 +1,4 @@
-"""Decode FP16 consumers: independent CPU oracle and optional prior-library A/B.
+"""Decode target FP16 and draft BF16 consumers: independent CPU oracle and optional prior-library A/B.
 Run from repository root, with idle NPU:
   PYTHONPATH=. python scripts/test_decode_half_consumers.py
   ... --baseline-lib /path/to/pre-change/libdecode_norm.so
@@ -28,12 +28,14 @@ def main():
     stream = torch.npu.Stream()
     cases = []
     for batch in (1, 2, 3, 4):
-        rows = batch * 36
-        for kind in ('act', 'combine'):
-            cols = 576 if kind == 'act' else 5120
+        for kind in ('act', 'combine', 'draft_act'):
+            # Draft keeps BF16 projection output; target consumes FP16.
+            rows = batch * (18 if kind == 'draft_act' else 36)
+            activation = kind != 'combine'
+            cols = 576 if activation else 5120
             # Rotate finite patterns through all positions; every finite FP16
             # value reaches both gate and up halves, even for B1.
-            width = rows * (288 if kind == 'act' else cols)
+            width = rows * (288 if activation else cols)
             patterns = [None] + list(range(0, len(finite), width))
             for offset in patterns:
                 if offset is None:
@@ -41,15 +43,17 @@ def main():
                 else:
                     indices = (torch.arange(width) + offset) % len(finite)
                     values = finite[indices].reshape(rows, -1)
-                    host = torch.cat((values, values.flip(1)), dim=1) if kind == 'act' else values
-                aux = torch.rand(rows) if kind == 'act' else torch.randperm(rows, dtype=torch.int64)
+                    host = torch.cat((values, values.flip(1)), dim=1) if activation else values
+                if kind == 'draft_act':
+                    host = host.bfloat16()
+                aux = torch.rand(rows) if activation else torch.randperm(rows, dtype=torch.int64)
                 x, other = host.npu(), aux.npu()
-                shape = (rows, 288) if kind == 'act' else (batch * 6, 5120)
-                dtype = torch.bfloat16 if kind == 'act' else torch.float32
+                shape = (rows, 288) if activation else (batch * 6, 5120)
+                dtype = torch.bfloat16 if activation else torch.float32
                 y = torch.empty(shape, dtype=dtype, device='npu')
-                symbol = 'dec_routed_' + kind
+                symbol = 'dec_ds_routed_act' if kind == 'draft_act' else 'dec_routed_' + kind
                 h = host.bfloat16().float()
-                if kind == 'act':
+                if activation:
                     gate = h[:, :288].clamp(max=10)
                     up = h[:, 288:].clamp(-10, 10)
                     ref = ((gate / (torch.exp(-gate) + 1)) * up * aux[:, None]).bfloat16()
@@ -61,7 +65,7 @@ def main():
                         ref = ref + selected[:, j]
                 native(lib, symbol, (x, other, y), batch, check_status=True)
                 torch.npu.synchronize()
-                if kind == 'act':
+                if activation:
                     # Ascend exp/div can round across a BF16 boundary vs CPU;
                     # the optional old native library must remain bit exact.
                     torch.testing.assert_close(y.cpu().float(), ref.float(), rtol=0.008, atol=1e-6)

@@ -6305,3 +6305,9 @@ and three semantic RPC checks pass. Development service restored on 8001.
 Small measured gain, not multi-ms or independent-restart performance proof.
 See reports/decode_half_consumers.{md,json} for scope and raw evidence.
 ```
+
+---
+
+```text
+Fix draft BF16 routed activation after target FP16 fusion
+```

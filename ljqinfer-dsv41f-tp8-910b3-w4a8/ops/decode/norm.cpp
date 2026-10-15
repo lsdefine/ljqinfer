@@ -944,6 +944,39 @@ extern "C" int dec_ds_dispatch(void* stream,const void* x,const void* ids,
 }
 
 
+// Draft projection output remains BF16; never reinterpret it as FP16.
+extern "C" __global__ __aicore__ void decode_ds_routed_act_bf16_kernel(
+    GM_ADDR H,GM_ADDR P,GM_ADDR Y,uint32_t rows,uint32_t blocks){
+    if(GetBlockIdx()>=blocks)return;
+    constexpr int32_t K=288,R=8,N=K*R;
+    TPipe pipe;TBuf<TPosition::VECCALC> bb,bg,bu,bt,bp;
+    pipe.InitBuffer(bb,N*2);pipe.InitBuffer(bg,N*4);
+    pipe.InitBuffer(bu,N*4);pipe.InitBuffer(bt,N*4);pipe.InitBuffer(bp,R*4);
+    auto b=bb.Get<bfloat16_t>();auto g=bg.Get<float>();
+    auto u=bu.Get<float>();auto t=bt.Get<float>();auto prob=bp.Get<float>();
+    GlobalTensor<bfloat16_t> gh,gy;GlobalTensor<float> gp;
+    gh.SetGlobalBuffer((__gm__ bfloat16_t*)H);gy.SetGlobalBuffer((__gm__ bfloat16_t*)Y);
+    gp.SetGlobalBuffer((__gm__ float*)P);
+    for(uint32_t tile=GetBlockIdx();tile<(rows+R-1)/R;tile+=blocks){
+        uint32_t row=tile*R;uint16_t active=min(uint32_t(R),rows-row);
+        int32_t count=int32_t(active)*K;
+        DataCopyParams cp{active,K/16,K/16,0};
+        DataCopy(b,gh[uint64_t(row)*2*K],cp);PipeBarrier<PIPE_ALL>();
+        Cast(g,b,RoundMode::CAST_NONE,count);PipeBarrier<PIPE_ALL>();
+        DataCopy(b,gh[uint64_t(row)*2*K+K],cp);
+        DataCopyPad(prob,gp[row],DataCopyExtParams{1,uint32_t(active)*4,0,0,0},
+                    DataCopyPadExtParams<float>{false,0,0,0});
+        SetFlag<HardEvent::MTE2_S>(EVENT_ID0);WaitFlag<HardEvent::MTE2_S>(EVENT_ID0);
+        PipeBarrier<PIPE_ALL>();Cast(u,b,RoundMode::CAST_NONE,count);PipeBarrier<PIPE_V>();
+        Mins(g,g,10.0f,count);Mins(u,u,10.0f,count);PipeBarrier<PIPE_V>();
+        Maxs(u,u,-10.0f,count);Muls(t,g,-1.0f,count);PipeBarrier<PIPE_V>();
+        Exp(t,t,count);PipeBarrier<PIPE_V>();Adds(t,t,1.0f,count);PipeBarrier<PIPE_V>();
+        Div(g,g,t,count);PipeBarrier<PIPE_V>();Mul(g,g,u,count);PipeBarrier<PIPE_V>();
+        for(uint16_t j=0;j<active;++j)Muls(g[j*K],g[j*K],prob.GetValue(j),K);
+        PipeBarrier<PIPE_V>();Cast(b,g,RoundMode::CAST_RINT,count);PipeBarrier<PIPE_ALL>();
+        DataCopy(gy[uint64_t(row)*K],b,count);PipeBarrier<PIPE_ALL>();
+    }
+}
 extern "C" int dec_ds_routed_act(void* stream,const void* hidden,const void* probability,
                                void* out,uint32_t batch){
     if(!stream||!batch||batch>MAX_BATCH||!aligned(hidden)||!aligned(probability)||!aligned(out))return -1;
@@ -951,7 +984,7 @@ extern "C" int dec_ds_routed_act(void* stream,const void* hidden,const void* pro
     if(overlap(out,rows*288*2,hidden,rows*576*2)||
        overlap(out,rows*288*2,probability,rows*4))return -1;
     uint32_t blocks=blocks_for(uint32_t((rows+7)/8));
-    decode_routed_act_kernel<<<blocks,nullptr,stream>>>((uint8_t*)hidden,
+    decode_ds_routed_act_bf16_kernel<<<blocks,nullptr,stream>>>((uint8_t*)hidden,
         (uint8_t*)probability,(uint8_t*)out,uint32_t(rows),blocks);return 0;
 }
 

@@ -15,6 +15,7 @@ import triton
 from model import weights as W
 from model.glm53_engine import Result
 from model.glm53_generate import Generation, accepted_prefix
+from model.sampling_runtime import SamplingRequest
 from model.glm53_workspace import Workspaces, IndexBuffers
 from model.glm53_block import _norm, add_residual
 from model.glm53_mtp_pool import TARGET_LAYERS
@@ -159,11 +160,17 @@ class BatchSession:
 
     @torch.inference_mode()
     def generate(self,prompts,limits,*,eos_token_ids=None,on_tokens=None,on_prefill=None,
-                 should_stop=None,on_round=None,on_done=None,use_graph=True):
+                 should_stop=None,on_round=None,on_done=None,use_graph=True,sampling_configs=None):
         if len(prompts)!=len(self.slots) or len(limits)!=len(prompts):raise ValueError('row count')
         for i,(prompt,limit) in enumerate(zip(prompts,limits)):
             if not prompt or limit<1 or len(prompt)+limit+8>self.slots[i][0].capacity:
                 raise ValueError('invalid prompt/output capacity')
+        configs=[{} for _ in prompts] if sampling_configs is None else sampling_configs
+        if len(configs)!=len(prompts):raise ValueError('sampling config count mismatch')
+        sampling=[SamplingRequest(n,self.base.engine.device,**c) for n,c in zip(limits,configs)]
+        if any(r.uniforms is not None for r in sampling):
+            self.base.selector._prepare(1,self.base.engine.w.lm_head.shape[0]*8)
+            for b in range(1,len(prompts)+1):self.base.selector._prepare(b*8,self.base.engine.w.lm_head.shape[0]*8)
         started=time.perf_counter();outputs=[[] for _ in prompts];steps=[[] for _ in prompts]
         reasons=['length']*len(prompts);active=[];finished=set()
         def finish(i):
@@ -175,7 +182,7 @@ class BatchSession:
         for i,(prompt,limit) in enumerate(zip(prompts,limits)):
             if cancel[i]:reasons[i]='cancelled';finish(i);continue
             e,d=self.slots[i];e.prepare_decode(len(prompt)+limit+8)
-            anchor,_=self.base.prefill(prompt,engine=e,draft=d)
+            anchor,_=self.base.prefill(prompt,engine=e,draft=d,sampling=sampling[i])
             outputs[i].append(anchor)
             if on_prefill:on_prefill(i)
             if on_tokens:on_tokens(i,[anchor])
@@ -203,7 +210,8 @@ class BatchSession:
             jd=self.joint_drafts[tuple(active)]
             drafts=jd.run([outputs[i][-1] for i in active],use_graph).tolist()
             blocks=[[outputs[i][-1]]+draft for i,draft in zip(active,drafts)]
-            predictions=self.verify(active,blocks,use_graph).argmax(-1).tolist()
+            logits=self.verify(active,blocks,use_graph)
+            predictions=self.base.selector.select(logits,[sampling[i] for i in active],[len(outputs[i]) for i in active]).tolist()
             next_active=[]
             for i,block,pred in zip(active,blocks,predictions):
                 e,d=self.slots[i];before=e.length;n=accepted_prefix(block,pred)

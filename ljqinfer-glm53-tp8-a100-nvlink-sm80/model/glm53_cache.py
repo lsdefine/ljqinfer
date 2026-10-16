@@ -12,13 +12,15 @@ from model.glm53_cold_transfer import ColdTransfer
 
 # Total host cold-cache bytes across all ranks (same setting name as A2).
 COLD_CACHE_BYTES = 88_370_380_800
+LOGITS_KEY = ('logits', 0)
 
 
 class PrefixState:
     def __init__(self, engine):
         self.engine = engine
-        self.namespace = 'glm53-int4-dflash2-tp8-v2-single-copy'
+        self.namespace = 'glm53-int4-dflash2-tp8-v3-endpoint-logits'
         self.resident = []
+        self.last_logits = None
         self.fields = {}
         for i in range(engine.kv.shape[0]):
             self.fields[('target', i)] = engine.kv[i].view(-1, 576)
@@ -46,6 +48,8 @@ class PrefixState:
         self.arena = HostArena(budget)
         warm = self.arena.alloc(512)
         self.arena.free(warm, 512)
+        # Endpoint payload, atomically accounted/evicted with its KV.
+        schema.append(Field(LOGITS_KEY, (None,), torch.float32))
         self.cold = ColdCache(schema, budget, namespace=self.namespace,
                               pin_memory=True, shm=self.arena)
         self.copy_stream = torch.cuda.Stream(device=engine.device)
@@ -61,6 +65,7 @@ class PrefixState:
         bound = copy.copy(self)
         bound.engine = engine
         bound.resident = []
+        bound.last_logits = None
         bound.fields = {}
         start, pages = engine.cache_page_span
         begin, end = start * 64, (start + pages) * 64
@@ -82,44 +87,61 @@ class PrefixState:
         return bound
 
     def restore(self, tokens):
-        # Previous source rows may be overwritten by this request.
+        # Drain before reusing source rows or inspecting endpoint payloads.
         self.drain()
-        # Re-evaluate the last prompt token to obtain the next-token logits.
-        wanted = tokens[:-1]
         hot = 0
-        for a, b in zip(wanted, self.resident):
+        for a, b in zip(tokens, self.resident):
             if a != b:
                 break
             hot += 1
-        with self.cold.lookup(wanted, namespace=self.namespace) as lease:
-            # Async admission/eviction can differ between local stores. Agree on
-            # a prefix all ranks can restore BEFORE any NCCL payload collective.
-            hot, cold = self.transfer.common_prefix(hot, lease.token_count)
+        hot_logits = self.last_logits if hot == len(self.resident) else None
+        if hot == len(tokens) and hot_logits is None:
+            hot = max(0, hot - 1)
+        self.last_logits = None
+        with self.cold.lookup(tokens, namespace=self.namespace) as lease:
+            cold_count = lease.token_count
+            endpoint_logits = None
+            if cold_count == len(tokens):
+                for entry_id, begin, end in reversed(self.cold.spans(lease)):
+                    if end == cold_count == self.cold.entries[entry_id].end:
+                        value = self.cold.storage[LOGITS_KEY][entry_id]
+                        if value.numel():
+                            endpoint_logits = value
+                        break
+                # Internal prefixes have KV but no matching endpoint logits.
+                if endpoint_logits is None:
+                    cold_count = max(0, cold_count - 1)
+            hot, cold = self.transfer.common_prefix(hot, cold_count)
             count = max(hot, cold)
             source = 'hot' if hot >= cold else 'cold'
             if source == 'cold':
                 lease.end = count
                 self.transfer.restore(self.fields, self.cold, lease, self.copy_stream)
+            if count == len(tokens):
+                self.last_logits = (hot_logits if source == 'hot' else
+                    endpoint_logits.to(self.engine.device, non_blocking=False))
             self.engine.length = count
             self.engine.pending = None
             self.engine.mtp_kv.lengths[0] = count
         self.resident = list(tokens[:count])
         return count, source if count else 'miss'
 
-    def publish(self, tokens):
+    def publish(self, tokens, logits=None):
         count = self.engine.length
         assert count == self.engine.mtp_kv.lengths[0] and count <= len(tokens)
         tokens = list(tokens[:count])
         self.resident = tokens
+        # Own the endpoint before another forward can reuse its storage.
+        self.last_logits = None if logits is None else logits.detach().float().clone()
         ready = torch.cuda.Event()
         ready.record(torch.cuda.current_stream(self.engine.device))
-        self.writer.submit(self._publish_async, tuple(tokens), ready)
+        self.writer.submit(self._publish_async, tuple(tokens), ready, self.last_logits)
 
-    def _publish_async(self, tokens, ready):
+    def _publish_async(self, tokens, ready, logits):
         with torch.inference_mode(), torch.cuda.device(self.engine.device), torch.cuda.stream(self.copy_stream):
             self.copy_stream.wait_event(ready)
             try:
-                self._store(tokens)
+                self._store(tokens, logits)
             except CacheCapacityError as exc:
                 # Store context has settled DMA and rolled back all staging.
                 # Cold publication is optional; active GPU KV remains valid.
@@ -127,7 +149,7 @@ class PrefixState:
                     'cold cache admission skipped after eviction: tokens=%d, %s',
                     len(tokens), exc)
 
-    def _store(self, tokens):
+    def _store(self, tokens, logits):
         # Never consult mutable engine.length/page maps in the worker.
         count = len(tokens)
         with self.cold.lookup(tokens, namespace=self.namespace) as parent:
@@ -136,7 +158,11 @@ class PrefixState:
                 return
             with self.cold.prepare(parent, tokens[start:]) as store:
                 for key in self.cold.fields:
-                    store.write(key, self.fields[key][start:count])
+                    if key == LOGITS_KEY:
+                        value = logits if logits is not None else torch.empty(0, dtype=torch.float32)
+                    else:
+                        value = self.fields[key][start:count]
+                    store.write(key, value)
                 store.commit()
 
     def drain(self):
@@ -145,6 +171,7 @@ class PrefixState:
     def invalidate(self):
         self.drain()
         self.resident = []
+        self.last_logits = None
 
     def clear(self):
         self.invalidate()

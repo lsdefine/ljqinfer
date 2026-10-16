@@ -1,7 +1,7 @@
 """Service layer for the ljqinfer stack.
 
 Strict layering: talks to the strategy layer through exactly one entry point,
-``strategy.query(input_ids, max_new_tokens, temperature=1) -> Queue``.  Never imports torch,
+``strategy.query(input_ids, max_new_tokens) -> Queue``.  Never imports torch,
 the model layer, or any kernel module.
 
 Stages: intake -> template -> tokenize -> decode/parse.
@@ -18,10 +18,9 @@ from dataclasses import dataclass, field
 from queue import Queue
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from server.generation_trace import GenerationTrace
-
 from jinja2 import Environment
 from tokenizers import Tokenizer
+from strategy.sampling_config import sampling_config, DEFAULT_TEMPERATURE
 
 __all__ = ["ServiceLayer", "ServiceError", "GenerationResult", "SurfaceParser"]
 
@@ -290,8 +289,8 @@ class ServiceLayer:
 
         Anthropic output_config.effort and OpenAI reasoning_effort share one
         native contract. Extensions may express the same value, never override
-        a contradictory value. Disabled thinking pre-closes the reasoning block.
-        Hard per-thinking token budgets remain unsupported.
+        a contradictory value. This model template has no no-thinking mode or
+        hard per-thinking token budget: reject those instead of faking support.
         """
         efforts = []
         for name in ("reasoning_effort",):
@@ -310,7 +309,6 @@ class ServiceLayer:
             if value is not None:
                 efforts.append((f"{name}.{key}", value))
 
-        switches = []
         thinking = request.get("thinking")
         if thinking is not None:
             if not isinstance(thinking, dict):
@@ -318,7 +316,8 @@ class ServiceLayer:
             kind = thinking.get("type")
             if not isinstance(kind, str) or kind not in {"enabled", "adaptive", "disabled"}:
                 raise ServiceError("'thinking.type' must be 'enabled', 'adaptive' or 'disabled'")
-            switches.append(kind != "disabled")
+            if kind == "disabled":
+                raise ServiceError("GLM-5.3's native template does not support disabled thinking; use low effort")
             if "budget_tokens" in thinking:
                 raise ServiceError("GLM-5.3 does not support a hard thinking.budget_tokens limit; use output_config.effort")
 
@@ -328,11 +327,8 @@ class ServiceLayer:
             if value is not None:
                 if not isinstance(value, bool):
                     raise ServiceError(f"'{name}' must be a boolean")
-                switches.append(value)
-
-        if len(set(switches)) > 1:
-            raise ServiceError("conflicting enable_thinking controls")
-        enabled = switches[0] if switches else True
+                if not value:
+                    raise ServiceError("GLM-5.3's native template does not support disabled thinking; use low effort")
 
         for name, value in efforts:
             if not isinstance(value, str) or value not in REASONING_EFFORTS:
@@ -347,7 +343,7 @@ class ServiceLayer:
             raise ServiceError("'clear_thinking' must be a boolean")
         if len(set(clears)) > 1:
             raise ServiceError("conflicting clear_thinking controls")
-        return {"enable_thinking": enabled, "reasoning_effort": effort if enabled else None,
+        return {"enable_thinking": True, "reasoning_effort": effort,
                 "clear_thinking": clears[0] if clears else True,
                 "thinking_budget_tokens": None}
 
@@ -417,16 +413,18 @@ class ServiceLayer:
         if max_tokens <= 0:
             raise ServiceError("'max_tokens' must be positive")
 
-        temperature = request.get("temperature", 1)
-        if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or temperature not in (0, 1):
-            raise ServiceError("'temperature' must be 0 (greedy) or 1 (sampling)")
         thinking = self._thinking_options(request, max_tokens)
 
         plan = {"messages": messages,
                 "tools": self._normalise_tools(request.get("tools")),
                 "max_tokens": min(max_tokens, self.max_output_tokens),
-                "temperature": temperature,
                 "model": request.get("model") or self.model_name}
+        try:
+            plan["sampling"] = sampling_config(
+                temperature=request.get("temperature", DEFAULT_TEMPERATURE),
+                top_p=request.get("top_p", .95), seed=request.get("seed"))
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
         plan.update(thinking)
         return plan
 
@@ -437,7 +435,6 @@ class ServiceLayer:
             messages=plan["messages"],
             tools=plan["tools"],
             add_generation_prompt=True,
-            enable_thinking=plan.get("enable_thinking", True),
             reasoning_effort=plan.get("reasoning_effort"),
             clear_thinking=plan.get("clear_thinking", True))
 
@@ -463,9 +460,6 @@ class ServiceLayer:
         """Consume explicit strategy dict events; prefill is metadata only."""
         while True:
             event = queue.get()
-            trace = getattr(queue, "generation_trace", None)
-            if trace is not None:
-                trace.event(event)
             kind = event.get("type")
             if kind == "error":
                 raise ServiceError(f"generation failed: {event.get('error')}")
@@ -484,8 +478,6 @@ class ServiceLayer:
                         yield kept, True
                         while True:
                             terminal = queue.get()
-                            if trace is not None:
-                                trace.event(terminal)
                             terminal_kind = terminal.get("type")
                             if terminal_kind == "error":
                                 raise ServiceError(
@@ -503,15 +495,7 @@ class ServiceLayer:
                 return
             raise ServiceError(f"unknown strategy event type: {kind!r}")
 
-    def _decode_stream(self, queue: Queue, counter=None):
-        try:
-            yield from self._decode_stream_impl(queue, counter)
-        finally:
-            trace = getattr(queue, "generation_trace", None)
-            if trace is not None:
-                trace.finish(self.tokenizer, queue)
-
-    def _decode_stream_impl(self, queue: Queue,
+    def _decode_stream(self, queue: Queue,
                        counter: Optional[List[int]] = None,
                        ) -> Iterator[str]:
         """Incremental text, safe against multi-byte pieces being split."""
@@ -591,8 +575,7 @@ class ServiceLayer:
         """Non-streaming ``/v1/messages`` generation."""
         input_ids, plan = self.build(request)
         submitted_at = time.perf_counter()
-        queue = self._strategy.query(input_ids, plan["max_tokens"], temperature=plan["temperature"])
-        queue.generation_trace = GenerationTrace(input_ids, plan, queue.request_id)
+        queue = self._strategy.query(input_ids, plan["max_tokens"], **plan["sampling"])
         if on_submit is not None:
             on_submit(getattr(queue, "cancel_handle", None))
         print(f"[service] blocking id={queue.request_id} input={len(input_ids)} "
@@ -631,6 +614,7 @@ class ServiceLayer:
         stats = self._stats(queue, submitted_at, first_token_at,
                             time.perf_counter(), counter[0])
         stats["reasoning_effort"] = plan.get("reasoning_effort") or "off"
+        stats.update(plan["sampling"])
         print(f"[ljqinfer] id={queue.request_id} "
               f"metrics={json.dumps(stats, ensure_ascii=False, sort_keys=True)}",
               flush=True)
@@ -657,8 +641,7 @@ class ServiceLayer:
         message_id = f"msg_{uuid.uuid4().hex[:24]}"
 
         submitted_at = time.perf_counter()
-        queue = self._strategy.query(input_ids, plan["max_tokens"], temperature=plan["temperature"])
-        queue.generation_trace = GenerationTrace(input_ids, plan, queue.request_id)
+        queue = self._strategy.query(input_ids, plan["max_tokens"], **plan["sampling"])
         if on_submit is not None:
             on_submit(getattr(queue, "cancel_handle", None))
         print(f"[service] stream id={queue.request_id} input={len(input_ids)} "
@@ -747,6 +730,7 @@ class ServiceLayer:
         stats = self._stats(queue, submitted_at, first_token_at,
                             time.perf_counter(), counter[0])
         stats["reasoning_effort"] = plan.get("reasoning_effort") or "off"
+        stats.update(plan["sampling"])
         print(f"[ljqinfer] id={queue.request_id} "
               f"metrics={json.dumps(stats, ensure_ascii=False, sort_keys=True)}",
               flush=True)

@@ -39,11 +39,11 @@ class RemoteStrategy:
         except (requests.RequestException, ValueError) as exc:
             raise BackendUnavailable("generation backend is not ready") from exc
 
-    def query(self, input_ids, max_new_tokens, temperature=1):
+    def query(self, input_ids, max_new_tokens, **sampling):
         out, rid = Queue(), "rpc_" + uuid.uuid4().hex[:16]
         response = requests.post(f"{self.base}/generate", stream=True,
             json={"request_id": rid, "input_ids": list(input_ids),
-                  "max_new_tokens": max_new_tokens, "temperature": temperature}, timeout=(3, 300))
+                  "max_new_tokens": max_new_tokens, "sampling": sampling}, timeout=(3, 300))
         response.raise_for_status()
         out.request_id, out.metrics, out.queue_depth_on_submit = rid, None, 0
         out.cancel_handle = handle = _Handle(self.base, rid)

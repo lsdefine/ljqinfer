@@ -43,8 +43,8 @@ def generate(body: dict):
     request_id = str(body["request_id"])
     try:
         queue = strategy.query(body["input_ids"], int(body["max_new_tokens"]),
-                               temperature=body.get("temperature", 1))
-    except ValueError as exc:
+                               **body.get("sampling", {}))
+    except (ValueError, TypeError) as exc:
         raise HTTPException(400, str(exc)) from exc
     with _state["lock"]:
         if request_id in _state["handles"]:

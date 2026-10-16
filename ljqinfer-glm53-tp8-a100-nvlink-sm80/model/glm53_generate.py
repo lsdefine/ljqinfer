@@ -1,4 +1,4 @@
-"""B1 greedy DFlash2 generation; only target predictions authorize output."""
+"""B1 greedy/sampling DFlash2 generation; only target predictions authorize output."""
 from dataclasses import dataclass
 import time
 import torch
@@ -6,7 +6,7 @@ from .glm53_engine import Engine
 from model.config import DEFAULT_PREFILL_CHUNK_TOKENS
 from .glm53_dflash import DFlash2
 from .glm53_cache import PrefixState
-from .sampling import pick_tokens
+from .sampling_runtime import SamplingRequest, TargetSelector
 
 
 def accepted_prefix(proposed, predictions):
@@ -30,6 +30,7 @@ class Generator:
         engine.mtp_kv.reserve(0,engine.capacity)
         self.cache=PrefixState(engine)
         self.prefill_stats={}
+        self.selector=TargetSelector(engine.device)
 
     @classmethod
     def load(cls,*,capacity=8192,prefill_chunk_tokens=DEFAULT_PREFILL_CHUNK_TOKENS,draft_dir=None):
@@ -43,7 +44,7 @@ class Generator:
         self.cache.clear()
 
     @torch.inference_mode()
-    def prefill(self, prompt_ids, *, engine=None, draft=None, temperature=0):
+    def prefill(self, prompt_ids, *, engine=None, draft=None, sampling=None):
         """Single-request prefill lifecycle, shared by single and batched decode.
 
         As in v41f Strategy: restore -> compute/commit/store each prompt chunk
@@ -71,9 +72,13 @@ class Generator:
                 torch.cuda.current_stream(self.engine.device).synchronize()
                 compute_seconds += time.perf_counter() - mark
                 mark = time.perf_counter()
-                cache.publish(prompt_ids[:end])
+                cache.publish(prompt_ids[:end], result.logits[-1])
                 store_seconds += time.perf_counter() - mark
-            anchor = int(pick_tokens(result.logits[-1:], [temperature]).item())
+            logits = cache.last_logits if result is None else result.logits[-1]
+            if sampling is None or sampling.uniforms is None:
+                anchor = int(logits.argmax().item())
+            else:
+                anchor = int(self.selector.select(logits.reshape(1,1,-1), [sampling], [0]).item())
         except BaseException:
             cache.invalidate()
             raise
@@ -87,7 +92,7 @@ class Generator:
 
     @torch.inference_mode()
     def generate(self,prompt_ids,*,max_new_tokens=64,use_graph=True,eos_token_ids=None,on_tokens=None,
-                 on_prefill=None,should_stop=None,profile=False):
+                 on_prefill=None,should_stop=None,profile=False,temperature=0.,top_p=.95,seed=None):
         prompt_ids=list(prompt_ids)
         if not prompt_ids:raise ValueError('empty prompt')
         if max_new_tokens<0:raise ValueError('negative generation length')
@@ -95,10 +100,14 @@ class Generator:
             raise ValueError('prompt+generation+verify scratch exceeds capacity')
         steps=[];output=[]
         if max_new_tokens==0:return Generation([],[],0.,'length')
+        sampling=SamplingRequest(max_new_tokens,self.engine.device,temperature=temperature,top_p=top_p,seed=seed)
+        if sampling.uniforms is not None:
+            self.selector._prepare(1,self.engine.w.lm_head.shape[0]*8)
+            self.selector._prepare(8,self.engine.w.lm_head.shape[0]*8)
         stop=set(self.draft.eos if eos_token_ids is None else eos_token_ids)
         started=time.perf_counter()
         self.engine.prepare_decode(len(prompt_ids)+max_new_tokens+8)
-        anchor,self.prefill_stats=self.prefill(prompt_ids)
+        anchor,self.prefill_stats=self.prefill(prompt_ids,sampling=sampling)
         if on_prefill:on_prefill()
         output.append(anchor)
         if on_tokens:on_tokens([anchor])
@@ -120,7 +129,7 @@ class Generator:
             draft_ms=(time.perf_counter()-t)*1000 if profile else None
             block=[anchor]+proposals
             t=time.perf_counter();checked=self.engine.verify(block)
-            predicted=checked.logits.argmax(-1).tolist()
+            predicted=self.selector.select(checked.logits.reshape(1,8,-1),[sampling],[len(output)])[0].tolist()
             if profile:torch.cuda.current_stream(self.engine.device).synchronize()
             verify_ms=(time.perf_counter()-t)*1000 if profile else None
             accepted=accepted_prefix(block,predicted)
@@ -144,6 +153,7 @@ class Generator:
         return Generation(output,steps,time.perf_counter()-started,reason)
 
     def close(self):
+        self.selector.close()
         self.cache.close()
         torch.cuda.current_stream(self.engine.device).synchronize();self.draft.close()
         if self.engine.graph is not None:

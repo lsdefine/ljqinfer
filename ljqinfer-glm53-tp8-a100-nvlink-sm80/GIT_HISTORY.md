@@ -669,3 +669,63 @@ HF/FP64 oracle CPU 131 passed+1skip; CUDA 33 passed+3skip; TP8 five pure/mixed t
 ```text
 Record idle and full-model sampler acceptance including 8192-token trace
 ```
+
+## 同步至 ed9501e507cf75712e6729b460ac173fdf47839e
+
+```text
+Implement standard repetition penalty default 1.1 with causal Q8 histories
+
+Prompt plus committed history and causal draft prefixes; persistent GPU masks, API overrides and trace provenance. 140 tests passed, 1 skipped. Live 47K TP8 wall step 47.078 -> 47.519ms (+0.94%); mixed boarding and service RPC passed. Sampled throughput differs; rare loop mitigation unproven. See acceptance report.
+```
+
+---
+
+```text
+Use validated FlashInfer nucleus sampler with graph-safe rank-zero RNG
+```
+
+---
+
+```text
+Remove retired inverse-CDF sampler; retain FlashInfer production path
+
+Remove legacy CDF helpers and Triton finish kernel; test active inclusive-cutoff sampler instead. Active function AST unchanged. CPU 96 passed/1 skipped; CUDA 94 passed/3 skipped. No tracked legacy references.
+```
+
+---
+
+```text
+Restore complete pre-sampling tree cce6604 for greedy MTP validation
+```
+
+---
+
+```text
+fix(glm53): restore full prefix endpoints with transaction-bound logits
+```
+
+---
+
+```text
+test(glm53): cover partial cold replay and greedy semantic throughput
+```
+
+---
+
+```text
+Implement request-owned exact top-p selection on stable greedy core
+
+T=1 p=.95, stable full-vocab ordering, FP64 block masses and local scans. Request seed/output-position RNG; preserve greedy, cache and DFlash2.
+
+Validated: 400 independent oracle cases, distribution test, graph Q8 .315ms; TP8 18 semantic cases; three original long prompts x two sampling seeds all EOS; full-cache exact replay and TP agreement. B1/fixed/resident mixed batches, boarding and cancellation regressions pass.
+
+Long-prompt weighted round 46.194ms greedy vs46.379ms sampling (+0.40%, different trajectories). Accepted drafts/step 1.715 vs1.460 (-14.9%), worst seed -31.45%; acceptance target not unconditionally met. HTTP wiring/deployment intentionally excluded; service stays stopped.
+
+Reproduce: python tests/test_glm53_sampling.py; torchrun --standalone --nproc-per-node=8 tests/bench_glm53_sampling.py; same for bench_glm53_sampling_boundaries.py. Long suite requires original samples in glm53_long_generations.
+```
+
+---
+
+```text
+Enable dynamic default sampling with single-turn boundary guard
+```

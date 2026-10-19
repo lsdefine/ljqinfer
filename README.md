@@ -8,6 +8,8 @@
 
 ## 在昇腾 910B 上部署 DeepSeek-V4.1（dsv4.1）
 
+**English:** Deploy **DeepSeek-V4.1 (dsv4.1) on Ascend 910B / 910B3 (NPU)** with a hardware-specialized inference engine — W4A8, DSpark speculative decoding, and 128K+ context.
+
 本仓库提供 **DeepSeek-V4.1-Flash（dsv4.1）· 8×昇腾 910B3 · TP8 · W4A8** 的完整可部署实例：[ljqinfer-dsv41f-tp8-910b3-w4a8](ljqinfer-dsv41f-tp8-910b3-w4a8/)。
 
 - **硬件/并行**：8×Ascend 910B3（A2），TP8；CANN 9.0.1 + PyTorch/torch_npu 2.10。

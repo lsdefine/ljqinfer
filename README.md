@@ -1,10 +1,22 @@
 # ljqinfer
 
-**ljqinfer 是一个随着模型、硬件和环境自我变换的推理引擎。**
+**面向 DeepSeek-V4.1（dsv4.1）等大模型、随硬件自我变换的专用推理引擎：支持昇腾 910B（Ascend 910B3 / NPU）与 NVIDIA A100/A800。**
 
 由 agent 针对模型与硬件生成专用引擎，再继承已有实例与演化历史，持续优化速度。**Powered by [GA (GenericAgent)](https://github.com/lsdefine/GenericAgent)** · [MIT License](LICENSE)。
 
 适配具体模型与硬件组合，包括 **A100 / sm80 稀疏注意力**、**Ascend 910B3 / W8A8、W4A8**。[设计理念](PRINCIPLES.md)
+
+## 在昇腾 910B 上部署 DeepSeek-V4.1（dsv4.1）
+
+本仓库提供 **DeepSeek-V4.1-Flash（dsv4.1）· 8×昇腾 910B3 · TP8 · W4A8** 的完整可部署实例：[ljqinfer-dsv41f-tp8-910b3-w4a8](ljqinfer-dsv41f-tp8-910b3-w4a8/)。
+
+- **硬件/并行**：8×Ascend 910B3（A2），TP8；CANN 9.0.1 + PyTorch/torch_npu 2.10。
+- **量化/解码**：W4A8 权重，DSpark Q6 推测解码，B1–B4 动态批处理。
+- **长上下文**：引擎容量 1M token，API 上限 512K；128K 零缓存 prefill **8,707 tok/s**，服务日志 **8,698 tok/s**。
+- **服务接口**：OpenAI `/v1/chat/completions` 与 Anthropic `/v1/messages`，支持普通/流式输出和图片输入。
+- **快速入口**：[实例 README](ljqinfer-dsv41f-tp8-910b3-w4a8/README.md) · [部署脚本](ljqinfer-dsv41f-tp8-910b3-w4a8/scripts/serve.sh)
+
+相关关键词：昇腾 910B / Ascend 910B3 / NPU 部署、DeepSeek-V4.1 / DeepSeek-V4.1-Flash / dsv4.1、W4A8 量化、DSpark 推测解码、CANN、长上下文 LLM 推理。
 
 ## 速度
 

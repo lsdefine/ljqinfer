@@ -4,6 +4,10 @@
 
 An agent-driven inference engine project for DeepSeek, GLM, and Qwen on NVIDIA A100/A800 and Ascend 910B3. Starting from proven implementations and their development history, the agent adapts and optimizes kernels, memory management, and execution for each model, machine, and workload.
 
+**Deploy proven implementations today. Adapt them as your needs evolve.**
+
+The repository provides mature, directly deployable implementations, including **DeepSeek-V4.1-Flash on NVIDIA A100 (SM80) and Ascend 910B3**—valuable deployment targets with limited mature off-the-shelf options. Choose a matching implementation and follow its build and launch instructions; use the agent-driven workflow to extend it for new hardware, models, or workloads.
+
 **The adaptation process is general-purpose. The resulting engine is specialized.**
 
 Powered by [GA (GenericAgent)](https://github.com/lsdefine/GenericAgent) · [MIT License](LICENSE)
@@ -118,7 +122,14 @@ The agent jointly tunes memory offloading, multi-level caching, quantization, an
 
 ## Models & deployment
 
-Each linked implementation includes its build and launch instructions.
+**Start with a mature implementation for your hardware.** Each linked implementation includes its build and launch instructions. Existing implementations can be deployed directly; further adaptation builds on their working code and optimization history.
+
+### DeepSeek-V4.1: ready-to-deploy implementations
+
+- **NVIDIA A100 / SM80:** [Deployment guide](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/README.md) — 8×A100 NVLink, EP8/TP8, FP8 / FP4 weights, and DSpark speculative decoding.
+- **Ascend 910B / 910B3:** [Deployment guide](ljqinfer-dsv41f-tp8-910b3-w4a8/README.md) — 8×910B3, TP8, W4A8 weights, and DSpark Q6 speculative decoding.
+
+### All implementations
 
 | Implementation | Hardware / parallelism | Weights / quantization | Speculative decoding |
 |:---|:---|:---|:---|

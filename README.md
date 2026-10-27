@@ -1,76 +1,93 @@
 # ljqinfer
 
-**面向 DeepSeek-V4.1（dsv4.1）等大模型、随硬件自我变换的专用推理引擎：支持昇腾 910B（Ascend 910B3 / NPU）与 NVIDIA A100/A800。**
+**专用的效率，可变的能力。**
 
-由 agent 针对模型与硬件生成专用引擎，再继承已有实例与演化历史，持续优化速度。**Powered by [GA (GenericAgent)](https://github.com/lsdefine/GenericAgent)** · [MIT License](LICENSE)。
+ljqinfer 是由智能体驱动的专用推理引擎项目：面向具体模型、硬件与任务目标，继承成熟实例与开发经验，持续改写、验证和优化实现。
 
-适配具体模型与硬件组合，包括 **A100 / sm80 稀疏注意力**、**Ascend 910B3 / W8A8、W4A8**。[设计理念](PRINCIPLES.md)
+**通用的是适配与优化过程，运行的是面向当前目标的专用引擎。**
 
-## 在昇腾 910B 上部署 DeepSeek-V4.1（dsv4.1）
+Powered by [GA (GenericAgent)](https://github.com/lsdefine/GenericAgent) · [MIT License](LICENSE)
 
-**English:** Deploy **DeepSeek-V4.1 (dsv4.1) on Ascend 910B / 910B3 (NPU)** with a hardware-specialized inference engine — W4A8, DSpark speculative decoding, and 128K+ context.
+[设计理念](PRINCIPLES.md) · [模型与硬件](#模型与硬件) · [性能概览](#性能概览) · [性能记录](docs/performance.md)
 
-本仓库提供 **DeepSeek-V4.1-Flash（dsv4.1）· 8×昇腾 910B3 · TP8 · W4A8** 的完整可部署实例：[ljqinfer-dsv41f-tp8-910b3-w4a8](ljqinfer-dsv41f-tp8-910b3-w4a8/)。
+## 为什么采用这套方法
 
-- **硬件/并行**：8×Ascend 910B3（A2），TP8；CANN 9.0.1 + PyTorch/torch_npu 2.10。
-- **量化/解码**：W4A8 权重，DSpark Q6 推测解码，B1–B4 动态批处理。
-- **长上下文**：引擎容量 1M token，API 上限 512K；128K 零缓存 prefill **8,707 tok/s**，服务日志 **8,698 tok/s**。
-- **服务接口**：OpenAI `/v1/chat/completions` 与 Anthropic `/v1/messages`，支持普通/流式输出和图片输入。
-- **快速入口**：[实例 README](ljqinfer-dsv41f-tp8-910b3-w4a8/README.md) · [部署脚本](ljqinfer-dsv41f-tp8-910b3-w4a8/scripts/serve.sh)
+专用优化需要跟上模型、硬件与任务的持续变化：
 
-相关关键词：昇腾 910B / Ascend 910B3 / NPU 部署、DeepSeek-V4.1 / DeepSeek-V4.1-Flash / dsv4.1、W4A8 量化、DSpark 推测解码、CANN、长上下文 LLM 推理。
+- **实现取决于具体条件。** 模型结构、显存与内存容量、计算能力、传输带宽、卡间互联，以及低延迟、高吞吐、长上下文等目标，共同决定合适的实现。
+- **优化需要跨层协同。** 量化改变容量与计算，卸载改变数据位置与传输，缓存改变恢复与调度，推测解码改变每步工作量；算子、存储与执行策略需要联合设计。
+- **持续适配需要持续开发。** 每次变化都要重新分析瓶颈、修改实现并验证正确性和性能。ljqinfer 将这套工作交给智能体持续推进，让经验通过代码与开发历史积累。
 
-## 速度
+**把适应性从固定框架的功能堆叠，转移到智能体的持续改造能力。**
 
-以下为各版本实测数据，测试上下文与计时方式列于表中。
+## 如何工作
 
-### Prefill 吞吐与 Decode 步时
+**人确定目标 → 智能体分析模型与硬件 → 继承相近实例 → 联合改写实现 → 实测并迭代。**
 
-| 实例 | Prefill（tok/s） | Decode（ms/step，B1） |
-|---|---:|---:|
-| GLM52 · 8×A100 | — | **43.170** @12K，Q6 |
-| DSV4F-0731 · 8×A100 | **8,018** @12K；6,969 @160K | **28.531** @51K；33.2 @160K |
-| Qwen38-27B-DFlash2 · 4×A800 · BF16 | **5,696** @12K | **23.738**，Q8 |
-| Qwen38-27B-DFlash2 · 4×910B3 · W8A8 | **7,031** @12K；4,781 @262K | **28.276–28.301**，Q8 |
-| GLM53 · 8×A100 | **5,583** @12K（78 层整模） | **43.616**（12-case 完整 round）；**45.805** @32K（模型 host，Q8） |
-| DSV41F · 8×A100 | **约 12,500** @21,212 / 26,012 tokens（后续 worker 记录）；10,665 @36K（旧测） | **15.950**（后续 B1 固定批宽测试）；15.875（旧模型 host 测试） |
-| [DSV41F · 8×910B3 · W4A8](ljqinfer-dsv41f-tp8-910b3-w4a8/) | **8,707** @128K，零缓存；服务日志 prefill **8,698** | **32.50–32.93** @约7–8K（模型均值）；**33.65–34.73**（完整均值） |
+1. **确定目标与资源。** 明确模型、请求负载、延迟、吞吐和上下文需求，探测硬件容量、带宽与计算能力。
+2. **继承实现与经验。** 从相近实例出发，复用成熟代码，结合开发历史选择改造路径。
+3. **按硬件联合调优。** 调整量化、内存卸载、多级缓存、并行与批处理；深入改写算子、数据布局、通信和调度。
+4. **用实测推动下一轮。** 验证正确性与端到端收益，将有效实现纳入引擎，再分析下一处瓶颈。
 
-### 输出吞吐与平均 accept
+目标或硬件改变后，智能体沿用这一过程，生成新的专用实现。工程原则与优化流程见[设计理念](PRINCIPLES.md)。
 
-| 实例 | 输出长度（tokens/请求） | 平均 draft accept | 实测（tok/s） | 按基准步时估算（tok/s） |
-|---|---:|---:|---:|---:|
-| GLM53 · 整模 12-case | — | — | **69.76**（每 case TPS 算术均值） | — |
-| GLM53 · 32K 数数短测 | 256 | 7.000 | **171.79**（冷）/ **173.01**（热） | — |
-| GLM52 | 595–1,203 | 1.063 | **41.84** | **47.80** |
-| DSV4F-0731 | 633–1,785 | 2.566 | **125.48** | **124.97** |
-| Qwen · A800 · BF16 | 625–906 | 3.345 | **159.81** | **183.05** |
-| Qwen · 910B3 · W8A8 | 936–1,488 | 4.270 | **160.15** | **186.22** |
-| **DSV41F · 短测，5次** | 64 | 4.727 | **373.69–375.03** | **360.77** |
-| DSV41F · 长生成，1次 | 519 | 2.065 | **191.09** | **193.08** |
+## 关键能力
 
-**估算 TPS = 1000 / 步时(ms) × (1 + 平均 draft accept)**。accept 受 prompt 影响，按总接受 draft 数 / 总步数计算；GLM52 / DSV4F-0731 / 两个 Qwen 项各取5条长输出日志，实测为总输出 / 总 Decode 秒。估算依次采用 43.170 / 28.531 / 23.738 / 28.301 / 15.875 ms 基准步时。
+### 按模型与硬件重组加速路径
 
-GLM53 32K 数数测试每步输出 8 token，完整步时 46.617 ms；12-case 吞吐取算术均值。
+- **加速方法嫁接：** GLM-5.3、Qwen3.8接入DFlash2，联合设计draft、verify、提交与状态恢复；DeepSeek系列使用MTP / DSpark。
+- **存量算力适配：** 面向A100 / A800的SM80架构，重写低比特计算、稀疏注意力和通信路径，让新模型使用已有算力。
+- **异构设备专用化：** 为昇腾910B3实现W8A8 / W4A8计算、AscendC算子与多卡执行，结合设备能力调整Prefill和Decode路径。
 
-### 后续服务吞吐记录
+### 内存缓存与推测解码协同
 
-| 实例 / 记录 | Decode 吞吐 | 口径 |
-|---|---:|---|
-| GLM53 · 同任务热缓存 HTTP，C1 / C2 / C4 / C8 | 每请求 **58.19 / 50.56 / 27.47 / 27.28 tok/s** | 256 token/请求；SSE 客户端计时排除 TTFT，历史版本 `b2bb4a0` |
-| 同上，端到端总吞吐 | **54.02 / 93.88 / 102.95 / 103.33 tok/s** | 包含排队和 prefill；C8 为 8 路客户端并发 |
-| DSV41F · 41 条线上请求观察 | **165–344 tok/s**；128K 热缓存 **218.9 tok/s** | 源提交 `298a7ad`；每步输出 2.77–5.76 token（含 anchor），41 条请求范围 |
+DRAM内存缓存保存可复用的历史计算状态；具体存储、搬运与恢复方式随模型和硬件优化。
 
-## 实例与量化
+- **缓存与推测解码一起设计：** Qwen昇腾实例将DRAM前缀缓存与DFlash2协同，实现历史复用和连续生成加速。
+- **八卡公共KV单副本：** GLM-5.3将公共KV在主机内存保存一份，恢复时采用流水广播；draft专有分片分别保存。缓存载荷由**768降至117 KiB/token**，减少**84.8%**；64K缓存恢复由**约0.69秒缩短至0.13秒**。
+- **按模型恢复状态：** DeepSeek-V4.1结合全局KV保存、短尾重放和公共前缀共享，恢复局部窗口与压缩状态，支持对话分支复用。
 
-| 实例 | 硬件 / 并行 | 模型精度 | 推测解码 |
+内存卸载、多级缓存、量化与执行策略，由智能体根据实际硬件和任务目标协同调优。
+
+## 模型与硬件
+
+仓库包含**5种模型、7个专用实例**。点击实例进入运行与构建说明。
+
+| 模型 / 实例 | 硬件与并行 | 权重与量化 | 推测解码 |
 |---|---|---|---|
-| [GLM52](ljqinfer-glm52-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 · sm80 | Huihui GLM-5.2 abliterated GGUF，**UD-Q3_K_M 混合量化** | 原生 MTP，Q6 verify |
-| [DSV4F-0731](ljqinfer-dsv4f-0731-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 · sm80 | DeepSeek-V4-Flash-0731，**FP8 / FP4 混合权重** | MTP / DSpark |
-| [qwen38-27B-dflash2 · BF16](ljqinfer-qwen38-27B-dflash2-tp4-a800-bf16/) | 4×A800 PCIe · TP4 | Huihui Qwen3.8-27B abliterated，target **BF16** | DFlash2，Q8 verify |
-| [qwen38-27B-dflash2 · W8A8](ljqinfer-qwen38-27B-dflash2-tp4-910b3-w8a8/) | 4×Ascend 910B3 · TP4 | Qwen3.8-27B，target **W8A8** | DFlash2，Q8 verify |
-| [GLM53](ljqinfer-glm53-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 · sm80 | GLM-5.3，原始 FP8 模型 + routed MoE **G64 INT4** 缓存 | DFlash2，Q8 verify |
-| [DSV41F](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · EP8/TP8 · sm80 | DeepSeek-V4.1-Flash，**FP8 / FP4 混合权重**；原生图像输入 | DSpark |
-| [DSV41F · 910B3](ljqinfer-dsv41f-tp8-910b3-w4a8/) | 8×Ascend 910B3 · TP8 | DeepSeek-V4.1-Flash，**W4A8**；图片输入 | DSpark，Q6 verify |
+| [GLM-5.2](ljqinfer-glm52-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | Huihui abliterated GGUF · UD-Q3_K_M混合量化 | 原生MTP · Q6 |
+| [DeepSeek-V4-Flash-0731](ljqinfer-dsv4f-0731-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | FP8 / FP4混合权重 | MTP / DSpark |
+| [Qwen3.8-27B · A800](ljqinfer-qwen38-27B-dflash2-tp4-a800-bf16/) | 4×A800 PCIe · TP4 | Huihui abliterated · BF16 | DFlash2 · Q8 |
+| [Qwen3.8-27B · 910B3](ljqinfer-qwen38-27B-dflash2-tp4-910b3-w8a8/) | 4×Ascend 910B3 · TP4 | W8A8 | DFlash2 · Q8 |
+| [GLM-5.3](ljqinfer-glm53-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | FP8模型 + routed MoE G64 INT4缓存 | DFlash2 · Q8 |
+| [DeepSeek-V4.1-Flash · A100](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · EP8/TP8 | FP8 / FP4混合权重 · 图像输入 | DSpark |
+| [DeepSeek-V4.1-Flash · 910B3](ljqinfer-dsv41f-tp8-910b3-w4a8/) | 8×Ascend 910B3 · TP8 | W4A8 · 图像输入 | DSpark · Q6 |
 
-各实例的 `GIT_HISTORY.md` 保留完整开发消息，包括优化思路、实验结果与速度记录。
+### 部署入口
+
+选择匹配硬件与模型的实例，按实例README准备权重、构建环境与启动配置。
+
+**DeepSeek-V4.1 on Ascend 910B / 910B3：** [部署说明](ljqinfer-dsv41f-tp8-910b3-w4a8/README.md) · [启动脚本](ljqinfer-dsv41f-tp8-910b3-w4a8/scripts/serve.sh)。该实例支持B1–B4动态批处理、512K API上下文，以及OpenAI和Anthropic普通 / 流式接口。
+
+## 性能概览
+
+B1 / B4表示批量大小1 / 4，步时以毫秒计；**Decode TPS展示单流、平均工况下的生成速度**。步时看执行效率与批处理扩展性，TPS看生成体验。
+
+| 模型 | 硬件 | Prefill（token/s） | B1（ms/步） | B4（ms/步） | Decode（token/s） |
+|---|---|---:|---:|---:|---:|
+| GLM-5.2 | 8×A100 | — | 43.17 | 110.12 | 42 |
+| DeepSeek-V4-Flash | 8×A100 | 8,018 | 25.80 | 45.01 | 125 |
+| Qwen3.8-27B | 4×A800 | 5,696 | 23.74 | 40.43 | 160 |
+| Qwen3.8-27B | 4×910B3 | 7,031 | 28.29 | 45.09 | 160 |
+| GLM-5.3 | 8×A100 | 5,583 | 43.73 | 96.00 | 70 |
+| DeepSeek-V4.1-Flash | 8×A100 | 12,500 | 16.14 | 29.93 | 191 |
+| DeepSeek-V4.1-Flash | 8×910B3 | 8,707 | 35.08 | 75.03 | 114 |
+
+测试设置、步时计时对象、推测接受率与历史服务数据见[性能记录](docs/performance.md)。
+
+## 文档与开发
+
+- [设计理念](PRINCIPLES.md)：工程分层、状态管理与持续优化流程。
+- [性能记录](docs/performance.md)：性能指标、测试设置与历史数据。
+- 各实例`README.md`：模型依赖、构建环境与运行入口。
+- 各实例`GIT_HISTORY.md`：完整开发消息，记录改造思路、实验结果与优化过程。

@@ -1,150 +1,139 @@
 # ljqinfer
 
-**专用的效率，可变的能力。**
+**Specialized performance. Evolving capabilities.**
 
-ljqinfer 是由智能体驱动的专用推理引擎项目：面向具体模型、硬件与任务目标，继承成熟实例与开发经验，持续改写、验证和优化实现。
+An agent-driven inference engine project for DeepSeek, GLM, and Qwen on NVIDIA A100/A800 and Ascend 910B3. Starting from proven implementations and their development history, the agent adapts and optimizes kernels, memory management, and execution for each model, machine, and workload.
 
-**通用的是适配与优化过程，运行的是面向当前目标的专用引擎。**
+**The adaptation process is general-purpose. The resulting engine is specialized.**
 
 Powered by [GA (GenericAgent)](https://github.com/lsdefine/GenericAgent) · [MIT License](LICENSE)
 
-[设计理念](PRINCIPLES.md) · [模型与硬件](#模型与硬件) · [性能概览](#性能概览) · [详细测速](#详细测速)
+[Performance](#performance) · [How it works](#how-it-works) · [Capabilities](#capabilities) · [Models & deployment](#models--deployment) · [Design principles](PRINCIPLES.md)
 
-## 为什么采用这套方法
+## Performance
 
-专用优化需要跟上模型、硬件与任务的持续变化：
+**5 models · 7 specialized implementations · NVIDIA GPUs and Ascend NPUs**
 
-- **实现取决于具体条件。** 模型结构、显存与内存容量、计算能力、传输带宽、卡间互联，以及低延迟、高吞吐、长上下文等目标，共同决定合适的实现。
-- **优化需要跨层协同。** 量化改变容量与计算，卸载改变数据位置与传输，缓存改变恢复与调度，推测解码改变每步工作量；算子、存储与执行策略需要联合设计。
-- **持续适配需要持续开发。** 每次变化都要重新分析瓶颈、修改实现并验证正确性和性能。ljqinfer 将这套工作交给智能体持续推进，让经验通过代码与开发历史积累。
+B1 and B4 are batch sizes 1 and 4. **Decode TPS shows average single-stream generation performance.** Step time captures execution efficiency and batching behavior; TPS captures the resulting generation experience.
 
-**把适应性从固定框架的功能堆叠，转移到智能体的持续改造能力。**
+| Model | Hardware | Prefill<br>token/s | B1<br>ms/step | B4<br>ms/step | Decode<br>token/s |
+|:---|:---|---:|---:|---:|---:|
+| GLM-5.2 | 8×A100 | — | 43.17 | 110.12 | **42** |
+| DeepSeek-V4-Flash | 8×A100 | 8,018 | 25.80 | 45.01 | **125** |
+| Qwen3.8-27B | 4×A800 | 5,696 | 23.74 | 40.43 | **160** |
+| Qwen3.8-27B | 4×910B3 | 7,031 | 28.29 | 45.09 | **160** |
+| GLM-5.3 | 8×A100 | 5,583 | 43.73 | 96.00 | **70** |
+| DeepSeek-V4.1-Flash | 8×A100 | 12,500 | 16.14 | 29.93 | **191** |
+| DeepSeek-V4.1-Flash | 8×910B3 | 8,707 | 35.08 | 75.03 | **114** |
 
-## 如何工作
+Step timings: full decode rounds for GLM-5.2/5.3; decode graph replay for DeepSeek-V4; rank-based timings for Qwen; fixed-width decode for V4.1 on A100; request-log wall time for V4.1 on Ascend. Context lengths, acceptance statistics, and service results are included below.
 
-**人确定目标 → 智能体分析模型与硬件 → 继承相近实例 → 联合改写实现 → 实测并迭代。**
+<details>
+<summary><strong>Step timing and aggregation</strong></summary>
 
-1. **确定目标与资源。** 明确模型、请求负载、延迟、吞吐和上下文需求，探测硬件容量、带宽与计算能力。
-2. **继承实现与经验。** 从相近实例出发，复用成熟代码，结合开发历史选择改造路径。
-3. **按硬件联合调优。** 调整量化、内存卸载、多级缓存、并行与批处理；深入改写算子、数据布局、通信和调度。
-4. **用实测推动下一轮。** 验证正确性与端到端收益，将有效实现纳入引擎，再分析下一处瓶颈。
+- **GLM-5.2 · A100:** 12K context, Q6 full decode round including verify, sampling, draft, commit, and TP synchronization. Development entry: `checkpoint: full MTP decode below 45 ms`.
+- **DeepSeek-V4-Flash · A100:** decode graph replay. Development entry: `amdahl (stop-service, MAXSEQ=65536)`.
+- **Qwen3.8-27B · A800:** slowest-rank median step time, from the `down_layout` optimization.
+- **Qwen3.8-27B · 910B3:** mean of three runs. B1: 28.301 / 28.276 / 28.298 ms; B4: 45.139 / 45.024 / 45.112 ms.
+- **GLM-5.3 · A100:** full round, mean rank-max time. Development entry: `Batch GLM53 attention projections and DFlash compute`.
+- **DeepSeek-V4.1-Flash · A100:** fixed-width decode A/B measurement. Development entry: `A/B, fixed-width batches`.
+- **DeepSeek-V4.1-Flash · 910B3:** mean request-log `wall_ms_per_step`, using 33,403 requests that stayed at B1 and 2,130 that stayed at B4. A2-1 and A2-3 service logs were read on 2026-10-27; requests were selected by `decode_batch_steps`. Single-stream TPS is the arithmetic mean across requests: **113.5446 token/s**, rounded to **114**.
 
-目标或硬件改变后，智能体沿用这一过程，生成新的专用实现。工程原则与优化流程见[设计理念](PRINCIPLES.md)。
+The first six timing records are in the corresponding instance's `GIT_HISTORY.md`. Their overview Decode TPS values are rounded from the long-generation or full-model results below. Prefill values use representative tests for each instance; GLM-5.2 has a blank Prefill entry.
 
-## 关键能力
+</details>
 
-### 按模型与硬件重组加速路径
+<details>
+<summary><strong>Context-length benchmarks, draft acceptance, and service throughput</strong></summary>
 
-- **加速方法嫁接：** GLM-5.3、Qwen3.8接入DFlash2，联合设计draft、verify、提交与状态恢复；DeepSeek系列使用MTP / DSpark。
-- **存量算力适配：** 面向A100 / A800的SM80架构，重写低比特计算、稀疏注意力和通信路径，让新模型使用已有算力。
-- **异构设备专用化：** 为昇腾910B3实现W8A8 / W4A8计算、AscendC算子与多卡执行，结合设备能力调整Prefill和Decode路径。
+### Prefill throughput and B1 decode timing
 
-### 内存缓存与推测解码协同
+| Instance | Prefill (token/s) | B1 decode (ms/step) |
+|:---|:---|:---|
+| GLM52 · 8×A100 | — | **43.170** @12K, Q6 |
+| DSV4F-0731 · 8×A100 | **8,018** @12K; 6,969 @160K | **28.531** @51K; 33.2 @160K |
+| Qwen38-27B-DFlash2 · 4×A800 · BF16 | **5,696** @12K | **23.738**, Q8 |
+| Qwen38-27B-DFlash2 · 4×910B3 · W8A8 | **7,031** @12K; 4,781 @262K | **28.276–28.301**, Q8 |
+| GLM53 · 8×A100 | **5,583** @12K, full 78-layer model | **43.616**, 12-case full round; **45.805** @32K, model host, Q8 |
+| DSV41F · 8×A100 | **~12,500** @21,212 / 26,012 tokens, later worker records; 10,665 @36K, earlier test | **15.950**, later B1 fixed-width test; 15.875, earlier model-host test |
+| DSV41F · 8×910B3 · W4A8 | **8,707** @128K, cold cache; service-log Prefill **8,698** | **32.50–32.93** @~7–8K, model mean; **33.65–34.73**, full-round mean |
 
-DRAM内存缓存保存可复用的历史计算状态；具体存储、搬运与恢复方式随模型和硬件优化。
+### Output throughput and draft acceptance
 
-- **缓存与推测解码一起设计：** Qwen昇腾实例将DRAM前缀缓存与DFlash2协同，实现历史复用和连续生成加速。
-- **八卡公共KV单副本：** GLM-5.3将公共KV在主机内存保存一份，恢复时采用流水广播；draft专有分片分别保存。缓存载荷由**768降至117 KiB/token**，减少**84.8%**；64K缓存恢复由**约0.69秒缩短至0.13秒**。
-- **按模型恢复状态：** DeepSeek-V4.1结合全局KV保存、短尾重放和公共前缀共享，恢复局部窗口与压缩状态，支持对话分支复用。
-
-内存卸载、多级缓存、量化与执行策略，由智能体根据实际硬件和任务目标协同调优。
-
-## 模型与硬件
-
-仓库包含**5种模型、7个专用实例**。点击实例进入运行与构建说明。
-
-| 模型 / 实例 | 硬件与并行 | 权重与量化 | 推测解码 |
-|---|---|---|---|
-| [GLM-5.2](ljqinfer-glm52-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | Huihui abliterated GGUF · UD-Q3_K_M混合量化 | 原生MTP · Q6 |
-| [DeepSeek-V4-Flash-0731](ljqinfer-dsv4f-0731-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | FP8 / FP4混合权重 | MTP / DSpark |
-| [Qwen3.8-27B · A800](ljqinfer-qwen38-27B-dflash2-tp4-a800-bf16/) | 4×A800 PCIe · TP4 | Huihui abliterated · BF16 | DFlash2 · Q8 |
-| [Qwen3.8-27B · 910B3](ljqinfer-qwen38-27B-dflash2-tp4-910b3-w8a8/) | 4×Ascend 910B3 · TP4 | W8A8 | DFlash2 · Q8 |
-| [GLM-5.3](ljqinfer-glm53-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | FP8模型 + routed MoE G64 INT4缓存 | DFlash2 · Q8 |
-| [DeepSeek-V4.1-Flash · A100](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · EP8/TP8 | FP8 / FP4混合权重 · 图像输入 | DSpark |
-| [DeepSeek-V4.1-Flash · 910B3](ljqinfer-dsv41f-tp8-910b3-w4a8/) | 8×Ascend 910B3 · TP8 | W4A8 · 图像输入 | DSpark · Q6 |
-
-### 部署入口
-
-选择匹配硬件与模型的实例，按实例README准备权重、构建环境与启动配置。
-
-**DeepSeek-V4.1 on Ascend 910B / 910B3：** [部署说明](ljqinfer-dsv41f-tp8-910b3-w4a8/README.md) · [启动脚本](ljqinfer-dsv41f-tp8-910b3-w4a8/scripts/serve.sh)。该实例支持B1–B4动态批处理、512K API上下文，以及OpenAI和Anthropic普通 / 流式接口。
-
-## 性能概览
-
-B1 / B4表示批量大小1 / 4，步时以毫秒计；**Decode TPS展示单流、平均工况下的生成速度**。步时看执行效率与批处理扩展性，TPS看生成体验。
-
-| 模型 | 硬件 | Prefill（token/s） | B1（ms/步） | B4（ms/步） | Decode（token/s） |
-|---|---|---:|---:|---:|---:|
-| GLM-5.2 | 8×A100 | — | 43.17 | 110.12 | 42 |
-| DeepSeek-V4-Flash | 8×A100 | 8,018 | 25.80 | 45.01 | 125 |
-| Qwen3.8-27B | 4×A800 | 5,696 | 23.74 | 40.43 | 160 |
-| Qwen3.8-27B | 4×910B3 | 7,031 | 28.29 | 45.09 | 160 |
-| GLM-5.3 | 8×A100 | 5,583 | 43.73 | 96.00 | 70 |
-| DeepSeek-V4.1-Flash | 8×A100 | 12,500 | 16.14 | 29.93 | 191 |
-| DeepSeek-V4.1-Flash | 8×910B3 | 8,707 | 35.08 | 75.03 | 114 |
-
-### 详细测速
-
-首页用 B1 / B4 步时展示执行效率，用单流 Decode TPS 展示代表性生成表现。B1、B4分别表示批量大小1、4；步时单位为ms/步，吞吐单位为token/s。下表列出每组步时的计时对象与记录位置。
-
-| 实例 | B1 | B4 | 计时对象与记录 |
-|---|---:|---:|---|
-| GLM-5.2 · A100 | 43.17 | 110.12 | 12K、Q6完整解码轮次，包含verify、采样、draft、commit与TP同步；`checkpoint: full MTP decode below 45 ms` |
-| DeepSeek-V4-Flash · A100 | 25.80 | 45.01 | Decode graph回放；`amdahl (stop-service, MAXSEQ=65536)`优化记录 |
-| Qwen3.8-27B · A800 | 23.74 | 40.43 | 各rank步时中位数取最慢rank；`down_layout`优化记录 |
-| Qwen3.8-27B · 910B3 | 28.29 | 45.09 | 三轮B1/B4测试平均；B1为28.301/28.276/28.298，B4为45.139/45.024/45.112 ms |
-| GLM-5.3 · A100 | 43.73 | 96.00 | 完整round、rank-max均值；`Batch GLM53 attention projections and DFlash compute` |
-| DeepSeek-V4.1-Flash · A100 | 16.14 | 29.93 | 固定批宽解码A/B测试；`A/B, fixed-width batches`优化记录 |
-| DeepSeek-V4.1-Flash · 910B3 | 35.08 | 75.03 | 生产请求日志`wall_ms_per_step`均值；全程B1共33,403条，全程B4共2,130条 |
-
-前六组步时见对应实例的`GIT_HISTORY.md`。昇腾V4.1统计取自2026-10-27读取的A2-1、A2-3服务日志，按`decode_batch_steps`筛选全程B1或B4请求。单流Decode TPS按请求取算术平均，33,403条请求均值为113.5446 token/s，首页取整为114。
-
-其余实例的首页Decode TPS取下文长输出或整模测试记录并四舍五入；Prefill取各实例的代表测试。GLM-5.2的Prefill单元格以“—”留空。测试输入长度、输出长度与推测接受率随各实例记录列出。
-
-### 历史测试与服务记录
-
-以下为各版本实测数据，测试上下文与计时方式列于表中。
-
-#### Prefill 吞吐与 Decode 步时
-
-| 实例 | Prefill（tok/s） | Decode（ms/step，B1） |
-|---|---:|---:|
-| GLM52 · 8×A100 | — | **43.170** @12K，Q6 |
-| DSV4F-0731 · 8×A100 | **8,018** @12K；6,969 @160K | **28.531** @51K；33.2 @160K |
-| Qwen38-27B-DFlash2 · 4×A800 · BF16 | **5,696** @12K | **23.738**，Q8 |
-| Qwen38-27B-DFlash2 · 4×910B3 · W8A8 | **7,031** @12K；4,781 @262K | **28.276–28.301**，Q8 |
-| GLM53 · 8×A100 | **5,583** @12K（78 层整模） | **43.616**（12-case 完整 round）；**45.805** @32K（模型 host，Q8） |
-| DSV41F · 8×A100 | **约 12,500** @21,212 / 26,012 tokens（后续 worker 记录）；10,665 @36K（旧测） | **15.950**（后续 B1 固定批宽测试）；15.875（旧模型 host 测试） |
-| [DSV41F · 8×910B3 · W4A8](ljqinfer-dsv41f-tp8-910b3-w4a8/) | **8,707** @128K，零缓存；服务日志 prefill **8,698** | **32.50–32.93** @约7–8K（模型均值）；**33.65–34.73**（完整均值） |
-
-#### 输出吞吐与平均 accept
-
-| 实例 | 输出长度（tokens/请求） | 平均 draft accept | 实测（tok/s） | 按基准步时估算（tok/s） |
-|---|---:|---:|---:|---:|
-| GLM53 · 整模 12-case | — | — | **69.76**（每 case TPS 算术均值） | — |
-| GLM53 · 32K 数数短测 | 256 | 7.000 | **171.79**（冷）/ **173.01**（热） | — |
+| Instance / workload | Output tokens/request | Mean accepted drafts/step | Measured token/s | Estimated token/s |
+|:---|---:|---:|---:|---:|
+| GLM53 · full-model, 12 cases | — | — | **69.76** | — |
+| GLM53 · 32K counting test | 256 | 7.000 | **171.79** cold / **173.01** warm | — |
 | GLM52 | 595–1,203 | 1.063 | **41.84** | **47.80** |
 | DSV4F-0731 | 633–1,785 | 2.566 | **125.48** | **124.97** |
 | Qwen · A800 · BF16 | 625–906 | 3.345 | **159.81** | **183.05** |
 | Qwen · 910B3 · W8A8 | 936–1,488 | 4.270 | **160.15** | **186.22** |
-| **DSV41F · 短测，5次** | 64 | 4.727 | **373.69–375.03** | **360.77** |
-| DSV41F · 长生成，1次 | 519 | 2.065 | **191.09** | **193.08** |
+| DSV41F · short generation, 5 runs | 64 | 4.727 | **373.69–375.03** | **360.77** |
+| DSV41F · long generation, 1 run | 519 | 2.065 | **191.09** | **193.08** |
 
-**估算 TPS = 1000 / 步时(ms) × (1 + 平均 draft accept)**。accept 受 prompt 影响，按总接受 draft 数 / 总步数计算；GLM52 / DSV4F-0731 / 两个 Qwen 项各取5条长输出日志，实测为总输出 / 总 Decode 秒。估算依次采用 43.170 / 28.531 / 23.738 / 28.301 / 15.875 ms 基准步时。
+**Estimated TPS = 1000 / step time (ms) × (1 + mean accepted drafts per step).** Acceptance varies with the prompt and is computed as total accepted drafts divided by total steps. GLM52, DSV4F-0731, and each Qwen instance use 5 long-output logs; measured throughput is total output tokens divided by total decode seconds. Estimates use baseline step times of 43.170 / 28.531 / 23.738 / 28.301 / 15.875 ms, respectively.
 
-GLM53 32K 数数测试每步输出 8 token，完整步时 46.617 ms；12-case 吞吐取算术均值。
+The GLM53 32K counting test produces 8 tokens per step with a full-round time of 46.617 ms. The 12-case result is the arithmetic mean of per-case TPS.
 
-#### 后续服务吞吐记录
+### Service throughput
 
-| 实例 / 记录 | Decode 吞吐 | 测试设置 |
-|---|---:|---|
-| GLM53 · 同任务热缓存 HTTP，C1 / C2 / C4 / C8 | 每请求 **58.19 / 50.56 / 27.47 / 27.28 tok/s** | 256 token/请求；SSE 客户端计时排除 TTFT，历史版本 `b2bb4a0` |
-| 同上，端到端总吞吐 | **54.02 / 93.88 / 102.95 / 103.33 tok/s** | 包含排队和 prefill；C8 为 8 路客户端并发 |
-| DSV41F · 41 条线上请求观察 | **165–344 tok/s**；128K 热缓存 **218.9 tok/s** | 源提交 `298a7ad`；每步输出 2.77–5.76 token（含 anchor），41 条请求范围 |
+| Instance / workload | Throughput (token/s) | Measurement |
+|:---|:---|:---|
+| GLM53 · warm-cache HTTP, C1 / C2 / C4 / C8 | **58.19 / 50.56 / 27.47 / 27.28** per request | 256 tokens/request; SSE client decode timing after TTFT; revision `b2bb4a0` |
+| Same workload · aggregate end-to-end | **54.02 / 93.88 / 102.95 / 103.33** | Includes queueing and Prefill; C8 = 8 concurrent clients |
+| DSV41F · 41 production requests | **165–344**; **218.9** with a warm 128K cache | Revision `298a7ad`; 2.77–5.76 tokens/step including the anchor; range across 41 requests |
 
-## 文档与开发
+</details>
 
-- [设计理念](PRINCIPLES.md)：工程分层、状态管理与持续优化流程。
-- [性能概览](#性能概览)与[详细测速](#详细测速)：Prefill、B1 / B4步时、输出吞吐与推测接受率。
-- 各实例`README.md`：模型依赖、构建环境与运行入口。
-- 各实例`GIT_HISTORY.md`：完整开发消息，记录改造思路、实验结果与优化过程。
+## How it works
+
+Specialized performance depends on the model, hardware, and workload. Quantization, offloading, caching, speculative decoding, and scheduling interact across the execution stack. As requirements change, the implementation needs continuous profiling, modification, and validation.
+
+**People set the goals. The agent adapts the implementation.**
+
+1. **Understand the target.** Inspect model structure, accelerator and host memory, compute capability, transfer bandwidth, and interconnects. Establish latency, throughput, and context-length goals.
+2. **Build on experience.** Start from a related implementation and use its development history to guide the next changes.
+3. **Optimize jointly.** Adapt quantization, memory offloading, multi-level caches, parallelism, and batching. Rewrite kernels, data layouts, communication, and scheduling where needed.
+4. **Measure and iterate.** Validate correctness and end-to-end gains, integrate the effective changes, and profile the next bottleneck.
+
+**Adaptability comes from the agent's ability to keep transforming the engine.** The process carries forward as hardware and objectives evolve.
+
+## Capabilities
+
+### Model- and hardware-specific acceleration
+
+- **Compose acceleration methods.** GLM-5.3 and Qwen3.8 integrate DFlash2 with coordinated draft, verify, commit, and state recovery. DeepSeek implementations use MTP / DSpark.
+- **Put existing GPUs to work.** SM80 implementations for A100/A800 specialize low-bit computation, sparse attention, and communication for newer models.
+- **Target heterogeneous hardware.** Ascend 910B3 implementations combine W8A8 / W4A8 computation, AscendC kernels, and multi-device execution with device-specific Prefill and Decode paths.
+
+### DRAM caching and speculative decoding, designed together
+
+Host-memory caches preserve reusable computation state. Storage, transfer, and recovery are specialized for each model and machine.
+
+- **Prefix reuse with DFlash2.** The Qwen Ascend implementation combines DRAM prefix caching with speculative decoding to accelerate both history recovery and continued generation.
+- **One host copy of shared KV across eight ranks.** GLM-5.3 restores shared KV through pipelined broadcast while retaining rank-local draft shards. Cache payload drops from **768 to 117 KiB/token**, an **84.8% reduction**; 64K cache recovery improves from **~0.69 s to 0.13 s**.
+- **Model-specific state recovery.** DeepSeek-V4.1 combines global KV storage, short-tail replay, and shared prefixes to restore local-window and compressed state and reuse conversation branches.
+
+The agent jointly tunes memory offloading, multi-level caching, quantization, and execution against the actual hardware and workload.
+
+## Models & deployment
+
+Each linked implementation includes its build and launch instructions.
+
+| Implementation | Hardware / parallelism | Weights / quantization | Speculative decoding |
+|:---|:---|:---|:---|
+| [GLM-5.2](ljqinfer-glm52-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | Huihui abliterated GGUF · UD-Q3_K_M mixed quantization | Native MTP · Q6 |
+| [DeepSeek-V4-Flash-0731](ljqinfer-dsv4f-0731-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | FP8 / FP4 mixed weights | MTP / DSpark |
+| [Qwen3.8-27B · A800](ljqinfer-qwen38-27B-dflash2-tp4-a800-bf16/) | 4×A800 PCIe · TP4 | Huihui abliterated · BF16 | DFlash2 · Q8 |
+| [Qwen3.8-27B · 910B3](ljqinfer-qwen38-27B-dflash2-tp4-910b3-w8a8/) | 4×Ascend 910B3 · TP4 | W8A8 | DFlash2 · Q8 |
+| [GLM-5.3](ljqinfer-glm53-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · TP8 | FP8 + routed MoE G64 INT4 cache | DFlash2 · Q8 |
+| [DeepSeek-V4.1-Flash · A100](ljqinfer-dsv41f-tp8-a100-nvlink-sm80/) | 8×A100 NVLink · EP8/TP8 | FP8 / FP4 · image input | DSpark |
+| [DeepSeek-V4.1-Flash · 910B3](ljqinfer-dsv41f-tp8-910b3-w4a8/) | 8×Ascend 910B3 · TP8 | W4A8 · image input | DSpark · Q6 |
+
+**DeepSeek-V4.1 on Ascend 910B / 910B3:** [Deployment guide](ljqinfer-dsv41f-tp8-910b3-w4a8/README.md) · [Launch script](ljqinfer-dsv41f-tp8-910b3-w4a8/scripts/serve.sh). Features include B1–B4 dynamic batching, a 512K API context limit, and OpenAI / Anthropic APIs with streaming and non-streaming output.
+
+## Documentation
+
+- [Design principles](PRINCIPLES.md): architecture, state management, and the continuous optimization workflow.
+- Instance `README.md` files: model dependencies, build environments, and launch instructions.
+- Instance `GIT_HISTORY.md` files: development decisions, experiments, performance results, and implementation history.

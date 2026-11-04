@@ -201,7 +201,7 @@ class Source:
             self.vendor = (VendorSelect(bank=t['index_bank'], table=t['table'],
                 slots=t['slots'], start=t['start'], pending=self.index_pending,
                 batch=batch, hccl_library=parallel.lib, hccl_comm=parallel.comm.value,
-                device=self.device) if borrowed is None else borrowed.vendor)
+                device=self.device, ratio=ratio) if borrowed is None else borrowed.vendor)
         except BaseException:
             self.close()
             raise

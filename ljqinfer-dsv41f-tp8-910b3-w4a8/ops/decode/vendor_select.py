@@ -38,7 +38,10 @@ class VendorSelect:
 
     def __init__(self, *, bank, table, slots, start, pending, batch,
                  heads_local=4, world=8, dim=128, rows=6, block=128,
-                 sparse_count=512, hccl_library=None, hccl_comm=0, device=None):
+                 sparse_count=512, hccl_library=None, hccl_comm=0, device=None, ratio=1):
+        if ratio not in (1, 2):
+            raise ValueError("selection compression ratio must be one or two")
+        self.ratio = ratio
         rpp, width = bank.shape[1], bank.shape[2]
         if width != dim or rpp % block:
             raise ValueError('vendor selection needs block aligned pages of index rows')
@@ -78,7 +81,7 @@ class VendorSelect:
         self.sparse_count = sparse_count
         self.device = dev
         self._lane = torch.arange(block, device=dev, dtype=torch.int64)
-        self._row = torch.arange(rows, device=dev, dtype=torch.int64)
+        self._row = torch.arange(rows // ratio, device=dev, dtype=torch.int64)
         self._page_lane = torch.arange(self.bpp, device=dev, dtype=torch.int64)
         self._scratch_pair = (self.scratch
                               + 2 * torch.arange(batch, device=dev, dtype=torch.int64))
@@ -96,9 +99,20 @@ class VendorSelect:
             self._gather = self._comm = None
 
         from ops.decode.vendor_indexer import VendorIndexer
-        self.indexer = VendorIndexer(self.query, self.key, self.weight,
-                                      self.seq_q, self.seq_k, self.block_table,
-                                      self.indices, sparse_count=self.sparse_count)
+        # Ratio-two queries have two parity subsequences. Each subsequence
+        # admits one compressed key per query, exactly matching right-down
+        # causality. Keep all operands at fixed addresses for graph capture.
+        self.parts = []
+        for offset in range(ratio):
+            n = rows // ratio
+            pq = torch.zeros(batch, n, self.heads, dim, dtype=self.query.dtype, device=dev)
+            pw = torch.zeros(batch, n, self.heads, dtype=self.weight.dtype, device=dev)
+            sq = torch.full((batch,), n, dtype=torch.int32, device=dev)
+            sk = torch.zeros(batch, dtype=torch.int32, device=dev)
+            ids = torch.zeros(batch, n, 1, sparse_count, dtype=torch.int32, device=dev)
+            plan = VendorIndexer(pq, self.key, pw, sq, sk, self.block_table,
+                                 ids, sparse_count=self.sparse_count)
+            self.parts.append((offset, pq, pw, sk, ids, plan))
 
     def prepare(self):
         """Rebuild block table, scratch blocks and lengths for this step."""
@@ -112,8 +126,12 @@ class VendorSelect:
         pages = pages.clamp(0, self.bank_pages - 1)
         table = (pages[:, :, None] * bpp + self._page_lane[None, None, :])
         self.block_table.copy_(table.reshape(batch, -1))
-        start = self.start
-        self.seq_k.copy_(start + self.rows)
+        # Table columns and scratch addresses use compressed-row coordinates.
+        start = torch.div(self.start, self.ratio, rounding_mode='floor')
+        self.seq_k.copy_(start + self.rows // self.ratio)
+        for offset, _, _, sk, _, _ in self.parts:
+            sk.copy_(torch.div(self.start + offset + self.rows - self.ratio + 1,
+                               self.ratio, rounding_mode='floor'))
         first = torch.div(start, block, rounding_mode='floor').clamp_(0, self.blocks_per_slot - 1)
         second = torch.clamp(first + 1, max=self.blocks_per_slot - 1)
         pair = torch.stack((first, second), dim=1)                   # [B,2]
@@ -125,7 +143,7 @@ class VendorSelect:
         self.flat.index_copy_(0, self._dst, self.staging)
         head = self._scratch_pair * block + (start - first * block)
         self.flat.index_copy_(0, (head[:, None] + self._row[None, :]).reshape(-1),
-                              self.pending.reshape(-1, self.dim))
+                              self.pending[:, :self.rows // self.ratio].reshape(-1, self.dim))
         # A sequence whose last block is the slot's last block clamps the pair to
         # one entry; both halves must then name the block that holds the new rows.
         tail = torch.where(second > first, self._scratch_pair + 1, self._scratch_pair)
@@ -150,9 +168,14 @@ class VendorSelect:
         else:
             self.query.copy_(iq.view(batch, rows, -1, self.dim))
             self.weight.copy_(head_weight.view(batch, rows, -1))
-        self.indexer.run()
+        for offset, pq, pw, _, ids, plan in self.parts:
+            pq.copy_(self.query[:, offset::self.ratio])
+            pw.copy_(self.weight[:, offset::self.ratio])
+            plan.run()
+            self.indices[:, offset::self.ratio].copy_(ids)
         selected.copy_(self.indices.view(batch, rows, self.sparse_count))
         return selected
 
     def close(self):
-        self.indexer.close()
+        for *_, plan in self.parts:
+            plan.close()

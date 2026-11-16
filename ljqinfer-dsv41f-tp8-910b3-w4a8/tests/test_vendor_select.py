@@ -227,6 +227,47 @@ class VendorSelectTest(unittest.TestCase):
                     finally:
                         source.close()
 
+    def test_ratio_one_reuses_gathered_operands(self):
+        obj = self.make_selector(1, 1)
+        _, query, weights, lengths, indices, _ = obj.parts[0]
+        self.assertIs(query, obj.query)
+        self.assertIs(weights, obj.weight)
+        self.assertIs(lengths, obj.seq_k)
+        self.assertIs(indices, obj.indices)
+        obj.close()
+
+    def test_partial_construction_closes_existing_plan(self):
+        closed = []
+        factory = self.make_indexer
+
+        def make(*args, **kwargs):
+            if self.plans:
+                raise RuntimeError('second plan failed')
+            plan = factory(*args, **kwargs)
+            plan.close = lambda: closed.append(plan)
+            return plan
+
+        with patch.object(sys.modules['ops.decode.vendor_indexer'], 'VendorIndexer', make):
+            with self.assertRaisesRegex(RuntimeError, 'second plan failed'):
+                self.make_selector(2, 1)
+        self.assertEqual(closed, self.plans)
+
+    def test_close_attempts_every_plan_and_is_idempotent(self):
+        obj = self.make_selector(2, 1)
+        closed = []
+
+        def fail():
+            closed.append(1)
+            raise RuntimeError('close failed')
+
+        self.plans[0].close = lambda: closed.append(0)
+        self.plans[1].close = fail
+        with self.assertRaisesRegex(RuntimeError, 'close failed'):
+            obj.close()
+        self.assertEqual(closed, [1, 0])
+        obj.close()
+        self.assertEqual(closed, [1, 0])
+
     def test_unsupported_ratios_fail_before_native_construction(self):
         for ratio in (0, 3, 4, 8):
             with self.subTest(ratio=ratio), self.assertRaisesRegex(ValueError, 'ratio'):

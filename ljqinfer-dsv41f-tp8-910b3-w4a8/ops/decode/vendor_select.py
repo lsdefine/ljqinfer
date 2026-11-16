@@ -8,16 +8,16 @@ full thirty two (six kilobytes on the wire, against the four hundred kilobyte
 score reduction it replaces), point one block table at the bank, dispatch.
 
 Two invariants shape the code.  The canonical bank is never mutated, yet the
-six uncommitted rows of this step must take part in selection: the two bank
+6/ratio uncommitted index rows must take part in selection: the two bank
 blocks that the new rows fall into are copied into a reserved scratch page and
 the new rows are written there, so the operator sees an exact causal key
-sequence of start+6 rows while the bank stays untouched.  And the bank and the
+sequence of (start+6)//ratio rows while the bank stays untouched.  And the bank and the
 pending rows are shared by every index layer, so the per-step preparation runs
 once for the canonical source and the reindex layers only dispatch.
 
 Selected ids come back in the convention decode attention already uses: an id
-below start addresses a committed bank row, an id at or above start addresses
-pending row id-start.  No remapping, no post pass.
+below start//ratio addresses a committed bank row; later ids address
+pending row id-start//ratio.  No remapping, no post pass.
 """
 
 import ctypes as C
@@ -29,7 +29,7 @@ _HCCL_BF16 = 11  # hccl_types.h, matches the FP32=4 constant used by the source
 
 
 class VendorSelect:
-    """Per-step preparation plus one dispatch per index layer.
+    """Per-step preparation plus one dispatch per query residue class.
 
     Owns its device buffers: they are allocated here, before capture, and
     their addresses stay fixed for the life of the object, which is what the
@@ -103,16 +103,23 @@ class VendorSelect:
         # admits one compressed key per query, exactly matching right-down
         # causality. Keep all operands at fixed addresses for graph capture.
         self.parts = []
-        for offset in range(ratio):
-            n = rows // ratio
-            pq = torch.zeros(batch, n, self.heads, dim, dtype=self.query.dtype, device=dev)
-            pw = torch.zeros(batch, n, self.heads, dtype=self.weight.dtype, device=dev)
-            sq = torch.full((batch,), n, dtype=torch.int32, device=dev)
-            sk = torch.zeros(batch, dtype=torch.int32, device=dev)
-            ids = torch.zeros(batch, n, 1, sparse_count, dtype=torch.int32, device=dev)
-            plan = VendorIndexer(pq, self.key, pw, sq, sk, self.block_table,
-                                 ids, sparse_count=self.sparse_count)
-            self.parts.append((offset, pq, pw, sk, ids, plan))
+        try:
+            for offset in range(ratio):
+                n = rows // ratio
+                if ratio == 1:
+                    pq, pw, sk, ids = self.query, self.weight, self.seq_k, self.indices
+                else:
+                    pq = torch.zeros(batch, n, self.heads, dim, dtype=self.query.dtype, device=dev)
+                    pw = torch.zeros(batch, n, self.heads, dtype=self.weight.dtype, device=dev)
+                    sk = torch.zeros(batch, dtype=torch.int32, device=dev)
+                    ids = torch.zeros(batch, n, 1, sparse_count, dtype=torch.int32, device=dev)
+                sq = torch.full((batch,), n, dtype=torch.int32, device=dev)
+                plan = VendorIndexer(pq, self.key, pw, sq, sk, self.block_table,
+                                     ids, sparse_count=self.sparse_count)
+                self.parts.append((offset, pq, pw, sk, ids, plan))
+        except BaseException:
+            self.close()
+            raise
 
     def prepare(self):
         """Rebuild block table, scratch blocks and lengths for this step."""
@@ -129,9 +136,10 @@ class VendorSelect:
         # Table columns and scratch addresses use compressed-row coordinates.
         start = torch.div(self.start, self.ratio, rounding_mode='floor')
         self.seq_k.copy_(start + self.rows // self.ratio)
-        for offset, _, _, sk, _, _ in self.parts:
-            sk.copy_(torch.div(self.start + offset + self.rows - self.ratio + 1,
-                               self.ratio, rounding_mode='floor'))
+        if self.ratio == 2:
+            for offset, _, _, sk, _, _ in self.parts:
+                sk.copy_(torch.div(self.start + offset + self.rows - self.ratio + 1,
+                                   self.ratio, rounding_mode='floor'))
         first = torch.div(start, block, rounding_mode='floor').clamp_(0, self.blocks_per_slot - 1)
         second = torch.clamp(first + 1, max=self.blocks_per_slot - 1)
         pair = torch.stack((first, second), dim=1)                   # [B,2]
@@ -169,13 +177,22 @@ class VendorSelect:
             self.query.copy_(iq.view(batch, rows, -1, self.dim))
             self.weight.copy_(head_weight.view(batch, rows, -1))
         for offset, pq, pw, _, ids, plan in self.parts:
-            pq.copy_(self.query[:, offset::self.ratio])
-            pw.copy_(self.weight[:, offset::self.ratio])
+            if self.ratio == 2:
+                pq.copy_(self.query[:, offset::self.ratio])
+                pw.copy_(self.weight[:, offset::self.ratio])
             plan.run()
-            self.indices[:, offset::self.ratio].copy_(ids)
+            if self.ratio == 2:
+                self.indices[:, offset::self.ratio].copy_(ids)
         selected.copy_(self.indices.view(batch, rows, self.sparse_count))
         return selected
 
     def close(self):
-        for *_, plan in self.parts:
-            plan.close()
+        error = None
+        while self.parts:
+            *_, plan = self.parts.pop()
+            try:
+                plan.close()
+            except BaseException as exc:
+                error = error or exc
+        if error is not None:
+            raise error

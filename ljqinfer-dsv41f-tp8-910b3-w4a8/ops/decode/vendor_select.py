@@ -29,7 +29,7 @@ _HCCL_BF16 = 11  # hccl_types.h, matches the FP32=4 constant used by the source
 
 
 class VendorSelect:
-    """Per-step preparation plus one dispatch per query residue class.
+    """Per-step preparation plus one dispatch with residue classes folded into batch.
 
     Owns its device buffers: they are allocated here, before capture, and
     their addresses stay fixed for the life of the object, which is what the
@@ -99,27 +99,26 @@ class VendorSelect:
             self._gather = self._comm = None
 
         from ops.decode.vendor_indexer import VendorIndexer
-        # Ratio-two queries have two parity subsequences. Each subsequence
-        # admits one compressed key per query, exactly matching right-down
-        # causality. Keep all operands at fixed addresses for graph capture.
-        self.parts = []
-        try:
-            for offset in range(ratio):
-                n = rows // ratio
-                if ratio == 1:
-                    pq, pw, sk, ids = self.query, self.weight, self.seq_k, self.indices
-                else:
-                    pq = torch.zeros(batch, n, self.heads, dim, dtype=self.query.dtype, device=dev)
-                    pw = torch.zeros(batch, n, self.heads, dtype=self.weight.dtype, device=dev)
-                    sk = torch.zeros(batch, dtype=torch.int32, device=dev)
-                    ids = torch.zeros(batch, n, 1, sparse_count, dtype=torch.int32, device=dev)
-                sq = torch.full((batch,), n, dtype=torch.int32, device=dev)
-                plan = VendorIndexer(pq, self.key, pw, sq, sk, self.block_table,
-                                     ids, sparse_count=self.sparse_count)
-                self.parts.append((offset, pq, pw, sk, ids, plan))
-        except BaseException:
-            self.close()
-            raise
+        # Fold query residue classes into batch: one causal staircase per class.
+        n = rows // ratio
+        if ratio == 1:
+            self.pq, self.pw = self.query, self.weight
+            self.pk, self.pt, self.pi = self.seq_k, self.block_table, self.indices
+        else:
+            self.pq = torch.zeros(batch * ratio, n, self.heads, dim,
+                                  dtype=self.query.dtype, device=dev)
+            self.pw = torch.zeros(batch * ratio, n, self.heads,
+                                  dtype=self.weight.dtype, device=dev)
+            self.pk = torch.zeros(batch * ratio, dtype=torch.int32, device=dev)
+            self.pt = torch.zeros(batch * ratio, self.blocks_per_slot,
+                                  dtype=torch.int32, device=dev)
+            self.pi = torch.zeros(batch * ratio, n, 1, sparse_count,
+                                  dtype=torch.int32, device=dev)
+        self.sq = torch.full((batch * ratio,), n, dtype=torch.int32, device=dev)
+        self.residues = torch.arange(ratio, dtype=torch.int64, device=dev)
+        self.plan = VendorIndexer(self.pq, self.key, self.pw, self.sq,
+                                  self.pk, self.pt, self.pi,
+                                  sparse_count=self.sparse_count)
 
     def prepare(self):
         """Rebuild block table, scratch blocks and lengths for this step."""
@@ -136,10 +135,6 @@ class VendorSelect:
         # Table columns and scratch addresses use compressed-row coordinates.
         start = torch.div(self.start, self.ratio, rounding_mode='floor')
         self.seq_k.copy_(start + self.rows // self.ratio)
-        if self.ratio == 2:
-            for offset, _, _, sk, _, _ in self.parts:
-                sk.copy_(torch.div(self.start + offset + self.rows - self.ratio + 1,
-                                   self.ratio, rounding_mode='floor'))
         first = torch.div(start, block, rounding_mode='floor').clamp_(0, self.blocks_per_slot - 1)
         second = torch.clamp(first + 1, max=self.blocks_per_slot - 1)
         pair = torch.stack((first, second), dim=1)                   # [B,2]
@@ -157,6 +152,12 @@ class VendorSelect:
         tail = torch.where(second > first, self._scratch_pair + 1, self._scratch_pair)
         scratch = torch.stack((self._scratch_pair, tail), dim=1)
         self.block_table.scatter_(1, pair, scratch.to(torch.int32))
+        if self.ratio == 2:
+            self.pk.view(batch, self.ratio).copy_(torch.div(
+                self.start[:, None] + self.residues[None, :] + self.rows - self.ratio + 1,
+                self.ratio, rounding_mode='floor'))
+            self.pt.view(batch, self.ratio, -1).copy_(self.block_table[:, None, :])
+
 
     def dispatch(self, iq, head_weight, selected):
         """Gather the local heads into the full set, select, publish ids."""
@@ -176,23 +177,22 @@ class VendorSelect:
         else:
             self.query.copy_(iq.view(batch, rows, -1, self.dim))
             self.weight.copy_(head_weight.view(batch, rows, -1))
-        for offset, pq, pw, _, ids, plan in self.parts:
-            if self.ratio == 2:
-                pq.copy_(self.query[:, offset::self.ratio])
-                pw.copy_(self.weight[:, offset::self.ratio])
-            plan.run()
-            if self.ratio == 2:
-                self.indices[:, offset::self.ratio].copy_(ids)
-        selected.copy_(self.indices.view(batch, rows, self.sparse_count))
+        if self.ratio == 2:
+            n = rows // self.ratio
+            self.pq.view(batch, self.ratio, n, self.heads, self.dim).copy_(
+                self.query.view(batch, n, self.ratio, self.heads, self.dim).transpose(1, 2))
+            self.pw.view(batch, self.ratio, n, self.heads).copy_(
+                self.weight.view(batch, n, self.ratio, self.heads).transpose(1, 2))
+        self.plan.run()
+        if self.ratio == 2:
+            selected.view(batch, rows // self.ratio, self.ratio, self.sparse_count).copy_(
+                self.pi.view(batch, self.ratio, rows // self.ratio, self.sparse_count).transpose(1, 2))
+        else:
+            selected.copy_(self.indices.view(batch, rows, self.sparse_count))
         return selected
 
     def close(self):
-        error = None
-        while self.parts:
-            *_, plan = self.parts.pop()
-            try:
-                plan.close()
-            except BaseException as exc:
-                error = error or exc
-        if error is not None:
-            raise error
+        plan = getattr(self, 'plan', None)
+        self.plan = None
+        if plan is not None:
+            plan.close()

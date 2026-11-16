@@ -101,7 +101,7 @@ class VendorSelectTest(unittest.TestCase):
         base_table = obj.table.clone()
         committed = obj.bank[:-1].clone()
         addresses = [tuple(x.data_ptr() for x in p.operands) +
-                     (p.indices.data_ptr(),) for *_, p in obj.parts]
+                     (p.indices.data_ptr(),) for p in [obj.plan]]
         iq = torch.arange(batch * 6 * 4 * 128, dtype=torch.float32)
         iq = (iq.reshape(batch, 6, 4, 128) % 31).to(torch.bfloat16)
         weights = (torch.arange(batch * 6 * 4).reshape(batch, 6, 4) % 17).to(torch.bfloat16)
@@ -124,12 +124,16 @@ class VendorSelectTest(unittest.TestCase):
                 self.assertTrue(torch.equal(obj.seq_k, (obj.start + 6) // ratio))
                 self.assertGreaterEqual(int(obj.block_table.min()), 0)
                 self.assertLess(int(obj.block_table.max()), obj.total_blocks)
-                for offset, pq, pw, _, ids, plan in obj.parts:
-                    self.assertTrue(torch.equal(pq, iq[:, offset::ratio]))
-                    self.assertTrue(torch.equal(pw, weights[:, offset::ratio]))
-                    self.assertTrue(torch.equal(ids[:, :, 0], expected_ids[:, offset::ratio]))
+                n = 6 // ratio
+                eq = iq.view(batch, n, ratio, 4, 128).transpose(1, 2).reshape(batch*ratio,n,4,128)
+                ew = weights.view(batch,n,ratio,4).transpose(1,2).reshape(batch*ratio,n,4)
+                ei = expected_ids.view(batch,n,ratio,8).transpose(1,2).reshape(batch*ratio,n,8)
+                self.assertTrue(torch.equal(obj.pq, eq))
+                self.assertTrue(torch.equal(obj.pw, ew))
+                self.assertTrue(torch.equal(obj.pi[:,:,0], ei))
+                self.assertTrue(torch.equal(obj.pt.view(batch,ratio,-1),obj.block_table[:,None,:].expand(-1,ratio,-1)))
                 current = [tuple(x.data_ptr() for x in p.operands) +
-                           (p.indices.data_ptr(),) for *_, p in obj.parts]
+                           (p.indices.data_ptr(),) for p in [obj.plan]]
                 self.assertEqual(current, addresses, 'bound operand addresses changed')
 
                 for b, start in enumerate(obj.start.tolist()):
@@ -223,50 +227,47 @@ class VendorSelectTest(unittest.TestCase):
                                                   eps=1e-6, parallel=parallel)
                     try:
                         self.assertEqual(source.vendor.ratio, ratio)
-                        self.assertEqual(len(source.vendor.parts), ratio)
+                        self.assertIsNotNone(source.vendor.plan)
                     finally:
                         source.close()
 
     def test_ratio_one_reuses_gathered_operands(self):
         obj = self.make_selector(1, 1)
-        _, query, weights, lengths, indices, _ = obj.parts[0]
+        query, weights, lengths, indices = obj.pq, obj.pw, obj.pk, obj.pi
         self.assertIs(query, obj.query)
         self.assertIs(weights, obj.weight)
         self.assertIs(lengths, obj.seq_k)
         self.assertIs(indices, obj.indices)
         obj.close()
 
-    def test_partial_construction_closes_existing_plan(self):
+    def test_one_plan_close_is_idempotent(self):
+        obj = self.make_selector(2, 4)
+        self.assertEqual(len(self.plans), 1)
         closed = []
-        factory = self.make_indexer
+        obj.plan.close = lambda: closed.append(1)
+        obj.close(); obj.close()
+        self.assertEqual(closed, [1])
 
-        def make(*args, **kwargs):
-            if self.plans:
-                raise RuntimeError('second plan failed')
-            plan = factory(*args, **kwargs)
-            plan.close = lambda: closed.append(plan)
-            return plan
-
-        with patch.object(sys.modules['ops.decode.vendor_indexer'], 'VendorIndexer', make):
-            with self.assertRaisesRegex(RuntimeError, 'second plan failed'):
-                self.make_selector(2, 1)
-        self.assertEqual(closed, self.plans)
-
-    def test_close_attempts_every_plan_and_is_idempotent(self):
+    def test_close_error_is_not_retried(self):
         obj = self.make_selector(2, 1)
         closed = []
-
-        def fail():
+        def fail_close():
             closed.append(1)
-            raise RuntimeError('close failed')
-
-        self.plans[0].close = lambda: closed.append(0)
-        self.plans[1].close = fail
-        with self.assertRaisesRegex(RuntimeError, 'close failed'):
+            raise RuntimeError('close sentinel')
+        obj.plan.close = fail_close
+        with self.assertRaisesRegex(RuntimeError, 'close sentinel'):
             obj.close()
-        self.assertEqual(closed, [1, 0])
         obj.close()
-        self.assertEqual(closed, [1, 0])
+        self.assertEqual(closed, [1])
+        self.assertIsNone(obj.plan)
+
+    def test_constructor_error_propagates(self):
+        def fail_plan(*args, **kwargs):
+            raise RuntimeError('constructor sentinel')
+        with patch('ops.decode.vendor_indexer.VendorIndexer', fail_plan):
+            with self.assertRaisesRegex(RuntimeError, 'constructor sentinel'):
+                self.make_selector(2, 1)
+        self.assertEqual(self.plans, [])
 
     def test_unsupported_ratios_fail_before_native_construction(self):
         for ratio in (0, 3, 4, 8):
